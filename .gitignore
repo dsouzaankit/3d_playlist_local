@@ -1,0 +1,44 @@
+# Logs / runtime
+*.log
+op_logs/
+**/transcode_logs/
+**/fisheye_temp/
+
+# Local AVS / media / deploy noise
+avs/
+standardized/
+*.mkv
+*.mp4
+*.m4v
+*.mov
+*.webm
+*.ts
+*.m2ts
+*.avi
+*.wmv
+
+# Backups / ignored trees
+ign/
+**/*.backup_*
+**/*_backup_*
+
+# Python / editor
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temp test artifacts
+_obf_test_tmp.ps1
+_parse_check_tmp.ps1
+
+# Large Cursor chat dumps (not source)
+ai/*.json

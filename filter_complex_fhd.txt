@@ -1,0 +1,4 @@
+[0:v]fps=30,setpts=PTS-STARTPTS,scale=1920x1080:flags=lanczos:force_original_aspect_ratio=increase,crop=1920:1080,gblur=sigma=10[bg];
+[0:v]scale=-1:1080:flags=lanczos[ov];
+[bg][ov]overlay=(W-w)/2:(H-h)/2,format=yuv420p[vout];
+[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[aout];
