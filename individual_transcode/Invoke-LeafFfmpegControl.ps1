@@ -30,6 +30,7 @@ $script:DlnaSegmentRootSubstLeaf = 'f1_media_F_subst'
 $script:DlnaExportSegmentKeepCountDefault = 2
 $script:DlnaSegmentRootEnsured = $false
 $script:DlnaSegmentRootEnsureMode = ''
+$script:DlnaWorkflowQuitCleanupDone = $false
 # Quit hides media from DLNA/Skybox by renaming; startup restores. Manual Cleanup-DlnaSegmentRoot.ps1 deletes.
 # Example: hybrid\3d_op_00_Full_SBS.mkv -> hybrid\<sha256(relpath)>.tmp (+ scrambled .dlna_obf_map.json).
 $script:DlnaObfuscationMapLeaf = '.dlna_obf_map.json'
@@ -331,6 +332,43 @@ function Remove-DlnaSegmentRootSubst {
         SubstRemoved     = $substRemoved
         Mount            = $substMount
     }
+}
+
+function Invoke-DlnaWorkflowQuitCleanup {
+    <#
+    .SYNOPSIS
+      Idempotent workflow quit: obfuscate media under DLNA root, then remove our F: subst fallback.
+      Safe to call from parent finally and from the robocopy re-invoke wrapper finally.
+    #>
+    param(
+        [switch] $KeepLogs,
+        [switch] $Quiet,
+        [switch] $DryRun
+    )
+    if ($script:DlnaWorkflowQuitCleanupDone -and -not $DryRun.IsPresent) {
+        return @{ Done = $true; Skipped = $true }
+    }
+    if (-not $DryRun.IsPresent) {
+        $script:DlnaWorkflowQuitCleanupDone = $true
+    }
+
+    $obf = $null
+    $subst = $null
+    try {
+        if (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue) {
+            $obf = Obfuscate-DlnaSegmentRootMedia -KeepLogs:$KeepLogs.IsPresent -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
+        }
+    } catch {
+        Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
+    }
+    try {
+        if (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue) {
+            $subst = Remove-DlnaSegmentRootSubst -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
+        }
+    } catch {
+        Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+    }
+    return @{ Done = $true; Skipped = $false; Obfuscate = $obf; Subst = $subst }
 }
 
 function Stop-LeafFfmpegExport {

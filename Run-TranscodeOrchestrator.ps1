@@ -1921,8 +1921,23 @@ $orchestratorExitCode = 0
 
 } finally {
     Stop-OrchestratorCompanionBinaries
-    if (-not $DryRun -and (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue)) {
+    if (-not $DryRun -and (Get-Command Invoke-DlnaWorkflowQuitCleanup -ErrorAction SilentlyContinue)) {
         # Keep logs only for real errors. Timeout (124) and user cancel (130) purge DLNA-root logs.
+        $isTimeoutOrCancel = ($orchestratorExitCode -eq $script:ExitCodeTimeout) -or
+            ($orchestratorExitCode -eq 130)
+        $keepLogsOnError = (-not $isTimeoutOrCancel) -and (
+            $orchestratorHadChildFailure -or (
+                ($orchestratorExitCode -ne 0) -and
+                ($orchestratorExitCode -ne $script:ExitCodeTimeout) -and
+                ($orchestratorExitCode -ne 130)
+            )
+        )
+        try {
+            [void](Invoke-DlnaWorkflowQuitCleanup -KeepLogs:$keepLogsOnError)
+        } catch {
+            Write-Warning ("DLNA quit cleanup failed: {0}" -f $_.Exception.Message)
+        }
+    } elseif (-not $DryRun -and (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue)) {
         $isTimeoutOrCancel = ($orchestratorExitCode -eq $script:ExitCodeTimeout) -or
             ($orchestratorExitCode -eq 130)
         $keepLogsOnError = (-not $isTimeoutOrCancel) -and (
@@ -1937,12 +1952,10 @@ $orchestratorExitCode = 0
         } catch {
             Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
         }
-    }
-    if (-not $DryRun -and (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue)) {
-        try {
-            [void](Remove-DlnaSegmentRootSubst)
-        } catch {
-            Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+        if (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue) {
+            try { [void](Remove-DlnaSegmentRootSubst) } catch {
+                Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+            }
         }
     }
     try {

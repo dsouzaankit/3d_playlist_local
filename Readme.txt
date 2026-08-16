@@ -36,11 +36,13 @@ Run sequence:
 #   so the Skybox share path is unchanged. When F: is present, segments write on the drive as usual.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media (via .dlna_obf_map.json) from a prior quit.
-#   Run quit (all 3 finally): Obfuscate-DlnaSegmentRootMedia renames media in place to
-#     <sha256(relativePath)>.tmp (no playable extension; scrambled .dlna_obf_map.json) so
-#     Skybox/DLNA stop seeing playable names; also hides fisheye_temp\avs\*.avs; does not delete media.
-#     Then Remove-DlnaSegmentRootSubst: if F: is our AppData subst fallback, remove the junction and
-#     subst F: /d (quit / abort / timeout). Leaves a real F: volume and %AppData%\3d_playlist_local alone.
+#   Run quit (all 3 finally): Invoke-DlnaWorkflowQuitCleanup obfuscates media to
+#     <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json; also hides fisheye_temp\avs),
+#     then Remove-DlnaSegmentRootSubst (our AppData subst F: + junction). Idempotent.
+#     Hybrid/fisheye robocopy re-invoke wrapper also runs quit cleanup so stale media-side
+#     deploy copies cannot leave F: subst / clear segment names behind.
+#     Hard-kill of the console window still skips finally (no cleanup until next manual
+#     Cleanup-DlnaSegmentRoot / quit cleanup).
 #       flat:   Run-TranscodeOrchestrator.ps1
 #       fisheye: run_batch_fisheye_v360.ps1
 #       hybrid: run_batch_vr_hybrid.ps1

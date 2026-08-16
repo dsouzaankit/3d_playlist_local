@@ -387,9 +387,21 @@ if ($env:FISHEYE_BATCH_USING_SYNCED -ne '1') {
             $env:FISHEYE_BATCH_USING_SYNCED = '1'
             try {
                 & $syncedFull @PSBoundParameters
-                exit $LASTEXITCODE
+                $script:FisheyeSyncedExitCode = [int]$LASTEXITCODE
+                exit $script:FisheyeSyncedExitCode
             } finally {
                 Remove-Item Env:FISHEYE_BATCH_USING_SYNCED -ErrorAction SilentlyContinue
+                # Outer process already Ensure'd via hub leaf; stale synced deploys may skip quit cleanup.
+                if (-not $DryRun -and (Get-Command Invoke-DlnaWorkflowQuitCleanup -ErrorAction SilentlyContinue)) {
+                    $code = 0
+                    try { $code = [int]$script:FisheyeSyncedExitCode } catch { }
+                    $keepLogs = ($code -ne 0) -and ($code -ne 124) -and ($code -ne 130)
+                    try {
+                        [void](Invoke-DlnaWorkflowQuitCleanup -KeepLogs:$keepLogs)
+                    } catch {
+                        Write-Warning ("DLNA quit cleanup after synced re-invoke failed: {0}" -f $_.Exception.Message)
+                    }
+                }
             }
         }
     }
@@ -1277,8 +1289,19 @@ finally {
     if ($batchCancelled -or $batchTimedOut) {
         Stop-FisheyeBatchFfmpeg
     }
-    if (-not $DryRun -and (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue)) {
+    if (-not $DryRun -and (Get-Command Invoke-DlnaWorkflowQuitCleanup -ErrorAction SilentlyContinue)) {
         # Keep logs only for real errors. Timeout (124) and user cancel (130) purge DLNA-root logs.
+        $isTimeoutOrCancel = $batchTimedOut -or $batchCancelled -or
+            ($batchExitCode -eq 124) -or ($batchExitCode -eq 130)
+        $keepLogsOnError = (-not $isTimeoutOrCancel) -and (
+            $batchFatalError -or ($failures.Count -gt 0) -or ($batchExitCode -ne 0)
+        )
+        try {
+            [void](Invoke-DlnaWorkflowQuitCleanup -KeepLogs:$keepLogsOnError)
+        } catch {
+            Write-Warning ("DLNA quit cleanup failed: {0}" -f $_.Exception.Message)
+        }
+    } elseif (-not $DryRun -and (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue)) {
         $isTimeoutOrCancel = $batchTimedOut -or $batchCancelled -or
             ($batchExitCode -eq 124) -or ($batchExitCode -eq 130)
         $keepLogsOnError = (-not $isTimeoutOrCancel) -and (
@@ -1289,12 +1312,10 @@ finally {
         } catch {
             Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
         }
-    }
-    if (-not $DryRun -and (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue)) {
-        try {
-            [void](Remove-DlnaSegmentRootSubst)
-        } catch {
-            Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+        if (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue) {
+            try { [void](Remove-DlnaSegmentRootSubst) } catch {
+                Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+            }
         }
     }
     if ($null -ne $mutex -and $mutexAcquired) {
