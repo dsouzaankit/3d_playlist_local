@@ -39,12 +39,15 @@ Run sequence:
 #   Run quit (all 3 finally): Obfuscate-DlnaSegmentRootMedia renames media in place to
 #     <sha256(relativePath)>.tmp (no playable extension; scrambled .dlna_obf_map.json) so
 #     Skybox/DLNA stop seeing playable names; also hides fisheye_temp\avs\*.avs; does not delete media.
+#     Then Remove-DlnaSegmentRootSubst: if F: is our AppData subst fallback, remove the junction and
+#     subst F: /d (quit / abort / timeout). Leaves a real F: volume and %AppData%\3d_playlist_local alone.
 #       flat:   Run-TranscodeOrchestrator.ps1
 #       fisheye: run_batch_fisheye_v360.ps1
 #       hybrid: run_batch_vr_hybrid.ps1
 #   On error (all 3): same obfuscate, but -KeepLogs retains *.log / logs\ (including fisheye_temp\logs).
 #     Triggers: clip/child failures, fatal batch stop (exit 1).
 #     Batch timeout (124) and user cancel (130) purge DLNA-root logs like clean success.
+#     Subst cleanup still runs on those exits.
 #   Manual delete (former quit clear): Cleanup-DlnaSegmentRoot.ps1 (beside this Readme)
 #     (script; calls function Clear-DlnaSegmentRootContents in individual_transcode\) - covers
 #     flat+fisheye+hybrid+fisheye_temp\avs under the shared root. Playlist-local transcode_logs\

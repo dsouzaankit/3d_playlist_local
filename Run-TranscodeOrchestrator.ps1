@@ -1938,6 +1938,13 @@ $orchestratorExitCode = 0
             Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
         }
     }
+    if (-not $DryRun -and (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue)) {
+        try {
+            [void](Remove-DlnaSegmentRootSubst)
+        } catch {
+            Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+        }
+    }
     try {
         if ($orchestratorMutex -and $ownsOrchestratorMutex) {
             [void]$orchestratorMutex.ReleaseMutex()

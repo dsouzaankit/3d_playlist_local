@@ -253,6 +253,86 @@ function Get-FisheyeTempRoot {
     return [System.IO.Path]::GetFullPath((Join-Path (Ensure-DlnaSegmentRoot) 'fisheye_temp'))
 }
 
+function Remove-DlnaSegmentRootSubst {
+    <#
+    .SYNOPSIS
+      On workflow quit: if F: is our AppData subst fallback, remove the 3d_fullsbs_trans junction
+      and subst F: /d. Does not touch a real F: volume or %AppData%\3d_playlist_local data.
+    #>
+    param(
+        [switch] $Quiet,
+        [switch] $DryRun
+    )
+    $letter = $script:DlnaSegmentRootDriveLetter
+    $substMount = $null
+    try {
+        $substMount = Get-DlnaSegmentRootSubstMount
+    } catch {
+        return @{ Removed = $false; Reason = 'no-appdata' }
+    }
+
+    $substTarget = Get-SubstDriveTarget -Letter $letter
+    if ([string]::IsNullOrWhiteSpace($substTarget)) {
+        if (-not $Quiet.IsPresent) {
+            Write-Host ("DLNA root subst cleanup: no {0}: subst mapping (nothing to remove)." -f $letter)
+        }
+        $script:DlnaSegmentRootEnsured = $false
+        $script:DlnaSegmentRootEnsureMode = ''
+        return @{ Removed = $false; Reason = 'no-subst' }
+    }
+    if (-not $substTarget.Equals($substMount, [StringComparison]::OrdinalIgnoreCase)) {
+        if (-not $Quiet.IsPresent) {
+            Write-Host ("DLNA root subst cleanup: {0}: maps to {1} (not our mount); leaving alone." -f `
+                $letter, $substTarget)
+        }
+        return @{ Removed = $false; Reason = 'foreign-subst'; Target = $substTarget }
+    }
+
+    $junction = [System.IO.Path]::GetFullPath((Join-Path $substMount 'f1_media\3d_fullsbs_trans'))
+    $junctionRemoved = $false
+    if (Test-Path -LiteralPath $junction) {
+        try {
+            $item = Get-Item -LiteralPath $junction -Force
+            $isReparse = [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+            if ($isReparse) {
+                if (-not $DryRun.IsPresent) {
+                    cmd.exe /c rmdir "$junction" | Out-Null
+                }
+                $junctionRemoved = -not (Test-Path -LiteralPath $junction)
+                if ($DryRun.IsPresent) { $junctionRemoved = $true }
+            }
+        } catch { }
+    }
+
+    $substRemoved = $false
+    if (-not $DryRun.IsPresent) {
+        try {
+            & subst.exe "${letter}:" /d 2>&1 | Out-Null
+        } catch { }
+        $still = Get-SubstDriveTarget -Letter $letter
+        $substRemoved = [string]::IsNullOrWhiteSpace($still)
+    } else {
+        $substRemoved = $true
+    }
+
+    $script:DlnaSegmentRootEnsured = $false
+    $script:DlnaSegmentRootEnsureMode = ''
+    $script:DlnaSegmentRootDefault = $script:DlnaSegmentRootPreferred
+
+    if (-not $Quiet.IsPresent) {
+        $verb = if ($DryRun.IsPresent) { 'would remove' } else { 'removed' }
+        Write-Host ("DLNA root subst cleanup: {0} {1}: -> {2} (junction_removed={3}, subst_removed={4})." -f `
+            $verb, $letter, $substMount, $junctionRemoved, $substRemoved)
+    }
+
+    return @{
+        Removed          = ($junctionRemoved -or $substRemoved)
+        JunctionRemoved  = $junctionRemoved
+        SubstRemoved     = $substRemoved
+        Mount            = $substMount
+    }
+}
+
 function Stop-LeafFfmpegExport {
     <#
     .SYNOPSIS

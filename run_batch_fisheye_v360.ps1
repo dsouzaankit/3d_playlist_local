@@ -1290,6 +1290,13 @@ finally {
             Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
         }
     }
+    if (-not $DryRun -and (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue)) {
+        try {
+            [void](Remove-DlnaSegmentRootSubst)
+        } catch {
+            Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+        }
+    }
     if ($null -ne $mutex -and $mutexAcquired) {
         try { $mutex.ReleaseMutex() | Out-Null } catch { }
         try { $mutex.Dispose() } catch { }
