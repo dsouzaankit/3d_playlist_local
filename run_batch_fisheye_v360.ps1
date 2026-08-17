@@ -108,7 +108,7 @@ function Invoke-SafeRobocopySync {
         [void][System.IO.Directory]::CreateDirectory($Destination)
     }
     $result = Invoke-SafeNativeCommand -SuccessExitCodes @(0, 1, 2, 3, 4, 5, 6, 7) -Command {
-        robocopy.exe $Source $Destination /E /XF *.log /NFL /NDL /NJH /NJS /NP | Out-Null
+        robocopy.exe $Source $Destination /E /XF *.log /XD ai ign .git standardized avs op_logs transcode_logs /NFL /NDL /NJH /NJS /NP | Out-Null
     }
     if ($result.Ok) {
         Write-Host "Robocopy synced (exit $($result.ExitCode)): $Source -> $Destination"

@@ -12,8 +12,8 @@ Run sequence:
 #                  standalone/double-click = full purge of .\avs; workflows pass -KeepCount 50 (newest only)
 #
 # Manual refresh of a media-side deploy copy (same flags as batch robocopy):
-#   robocopy P:\all_scripts\3d_playlist_local {media}\3d_playlist_local /E /XF *.log
-#   /XF keeps local transcode_logs on media-side deploy copies; scripts still overwrite from P:\ hub.
+#   robocopy P:\all_scripts\3d_playlist_local {media}\3d_playlist_local /E /XF *.log /XD ai ign .git standardized avs op_logs transcode_logs
+#   /XF keeps local *.log; /XD skips chat dumps, ign\, .git, media/runtime trees so P:/L: cloud sync stays light.
 #
 # LAN / bandwidth: if DLNA or segment viewing stalls from network bandwidth issues, reboot routers
 #   using scripts in P:\all_scripts\5g_router_reboot

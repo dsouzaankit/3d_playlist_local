@@ -32,7 +32,7 @@ try {
 P:\all_scripts\setup_venv.bat
 # copy recursively and merge (overwrite with latest version wherever applicable)
 # /XF: keep local transcode/orchestrator logs (individual_transcode\transcode_logs, etc.)
-robocopy $syncSource $playlistLocal /E /XF *.log
+robocopy $syncSource $playlistLocal /E /XF *.log /XD ai ign .git standardized avs op_logs transcode_logs
 Set-Location -LiteralPath $playlistLocal
 
 # Retain newest 50 flat/hybrid .avs under .\avs (StreamTo3D GUI + flat_temp exports)
