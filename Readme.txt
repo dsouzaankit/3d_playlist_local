@@ -34,8 +34,9 @@ Run sequence:
 #   Skybox web-client share should keep pointing at that path.
 #   Ensure-DlnaSegmentRoot always stores under %AppData%\3d_playlist_local. During the run,
 #   Explorer dummy F: is subst'd to %AppData%\f1_media_F_subst + junction so the Skybox path
-#   stays F:\f1_media\3d_fullsbs_trans. Never writes onto a real F: volume — if a real F: is
-#   present, unmount it so the dummy letter can be mapped.
+#   stays F:\f1_media\3d_fullsbs_trans. Never writes onto a real F: volume. If a real F: (or a
+#   subst to some other folder) is already mapped, Ensure-DlnaSegmentRoot throws and the
+#   workflow stops — unmount it so the dummy letter can be created.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media and .avs (via .dlna_obf_map.json) from a prior quit.
 #   Run quit (all 3 finally): Invoke-DlnaWorkflowQuitCleanup obfuscates media and .avs to
