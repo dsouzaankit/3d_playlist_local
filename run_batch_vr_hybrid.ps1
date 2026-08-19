@@ -49,7 +49,7 @@ if ((Split-Path -Leaf $scriptDir) -ieq '3d_playlist_local') {
 }
 $syncSource = 'P:\all_scripts\3d_playlist_local'
 $pythonExe = 'P:\all_scripts\py_venv1\Scripts\python.exe'
-# Ensure Skybox DLNA root before any Join-Path on F:\... (pwsh validates drive letters).
+# Ensure Skybox DLNA root (dummy subst F: + AppData store) before any Join-Path on F:\... (pwsh validates drive letters).
 $leafEarly = Join-Path $syncSource 'individual_transcode\Invoke-LeafFfmpegControl.ps1'
 if (-not (Test-Path -LiteralPath $leafEarly -PathType Leaf)) {
     $leafEarly = Join-Path $playlistLocal 'individual_transcode\Invoke-LeafFfmpegControl.ps1'

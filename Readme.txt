@@ -2,6 +2,7 @@ Run sequence:
 
 # Script layout (flat / fisheye / hybrid)
 #   Canonical scripts: P:\all_scripts\3d_playlist_local  (robocopy source at batch start)
+#                      F:\all_scripts hub is retired — do not sync or run from F:\all_scripts
 #   Deploy:            P:\all_scripts\3d_playlist_local -> each {media}\3d_playlist_local
 #                      (+ parent run_batch_*.ps1 launchers beside media_files.txt)
 #   Other deps:        P:\all_scripts\py_venv1, P:\all_scripts\setup_venv.bat, P:\all_scripts\AutoHotkey
@@ -26,19 +27,21 @@ Run sequence:
 #     may still exit 0 when the queue empties.
 #   Hung read on a dead share: no short "drive lost" timeout. -BatchTimeoutSec (default 5400s)
 #     wall-clock deadline kills the child/ffmpeg (exit 124) and stops the batch. Enter cancel = 130.
-#   No automatic remount of source UNC/mapped drives. Ensure-DlnaSegmentRoot only remaps missing
-#     F: DLNA *output*, not input media.
+#   No automatic remount of source UNC/mapped drives. Ensure-DlnaSegmentRoot only keeps dummy
+#     subst F: for DLNA *output*, not input media.
 #
 # DLNA segment root (flat / fisheye / hybrid): F:\f1_media\3d_fullsbs_trans
 #   Skybox web-client share should keep pointing at that path.
-#   If F: is missing, Ensure-DlnaSegmentRoot (Invoke-LeafFfmpegControl.ps1) stores under
-#   %AppData%\3d_playlist_local and recreates F:\f1_media\3d_fullsbs_trans via subst + junction
-#   so the Skybox share path is unchanged. When F: is present, segments write on the drive as usual.
+#   Ensure-DlnaSegmentRoot always stores under %AppData%\3d_playlist_local. During the run,
+#   Explorer dummy F: is subst'd to %AppData%\f1_media_F_subst + junction so the Skybox path
+#   stays F:\f1_media\3d_fullsbs_trans. Never writes onto a real F: volume — if a real F: is
+#   present, unmount it so the dummy letter can be mapped.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media (via .dlna_obf_map.json) from a prior quit.
 #   Run quit (all 3 finally): Invoke-DlnaWorkflowQuitCleanup obfuscates media to
 #     <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json; also hides fisheye_temp\avs),
-#     then Remove-DlnaSegmentRootSubst (our AppData subst F: + junction). Idempotent.
+#     then Remove-DlnaSegmentRootSubst (clears dummy subst F: + junction; Explorer icon goes away).
+#     Idempotent. Next start recreates dummy F:.
 #     Hybrid/fisheye robocopy re-invoke wrapper also runs quit cleanup so stale media-side
 #     deploy copies cannot leave F: subst / clear segment names behind.
 #     Hard-kill of the console window still skips finally (no cleanup until next manual
@@ -183,7 +186,8 @@ Run sequence:
 #     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix; skips prepare/chase); else
 #     Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync (inline pass-2 in hidden prepare shell).
 #   -InterClipWaitSec 0 disables inter-clip DLNA buffer (default 0 in script; set 60 if you want minute gap).
-#   Pass 1: Run-FisheyeV360.ps1 -> fisheye_temp\{base}.fisheye.frag.mp4 (av1_qsv 50M fragmented)
+#   Pass 1: Run-FisheyeV360.ps1 -LiteralPath ... -> fisheye_temp\{base}.fisheye.frag.mp4 (av1_qsv 50M fragmented)
+#     (no F:\f1_media\fisheye_test defaults; omitted -OutputDirectory writes beside the input)
 #   Pass 2: Run-TranscodeFfmpeg.ps1 chase -> F:\f1_media\3d_fullsbs_trans\fisheye\3d_op_%02d_LR_180_FISHEYE.mkv (av1_qsv 75M, readrate 1)
 #     60-second DLNA segments: -segment_time 60 -segment_wrap 2 -reset_timestamps 1
 #     Chase (fisheye_temp\avs): each round -t 60 max; alternates -segment_start_number 0 then 1
