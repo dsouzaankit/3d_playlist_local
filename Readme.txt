@@ -41,8 +41,8 @@ Run sequence:
 #   drive letter on conflict: Skybox's share, Explorer context-menu registry, and script
 #   paths are all fixed at F:\f1_media\3d_fullsbs_trans.
 #   av1_qsv encode (all 3: flat DLNA, fisheye pass-1+2, hybrid routes): integer CFR
-#     24/25/30/50/60. NTSC 29.97/23.976/59.94 snapped to 30/24/60 — QSV rejects those rates.
-#     Snap is drop/dup only (no AviSynth ConvertFPS / QSV VPP blend). Hybrid flat AVS uses convertfps=false.
+#     24/25/30/50/60. NTSC 29.97/23.976/59.94 tagged 30/24/60 via AVS AssumeFPS (no DirectShow
+#     fps=/convertfps, no ffmpeg fps filter — those blend and look soft). QSV rejects NTSC rates.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media and .avs (via .dlna_obf_map.json) from a prior quit.
 #   Run quit (all 3 finally): Invoke-DlnaWorkflowQuitCleanup obfuscates media and .avs to
@@ -129,7 +129,7 @@ Run sequence:
 #   resets the cursor to the oldest live item (skips paths already completed this run); if still empty,
 #   waits one idle poll (-LiveQueueIdlePollSec) then finishes (or Enter / BatchTimeoutSec).
 #   Each .avs -> Run-TranscodeFfmpeg.ps1 child -> 3d_op_%02d_Full_SBS.mkv
-#   av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 snapped to 30 (QSV rejects 29.97; drop/dup, no blend).
+#   av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 tagged 30 via AssumeFPS (QSV rejects 29.97).
 #   DLNA segments: -segment_time 60 -segment_wrap 2 (~60s per file, two-slot rotation; one encode per clip)
 #   -BatchTimeoutSec 5400 default (entire queue wall-clock; same semantics as fisheye batch)
 #   Child wait heartbeat: source_duration/5s per clip (Get-FisheyePrepareHeartbeat.ps1; -PrepareHeartbeatDivisor)
@@ -150,7 +150,7 @@ Run sequence:
 # Recommended: .\run_batch_vr_hybrid.ps1 beside media_files.txt (setup_script_files.py deploys it with the other batch launchers)
 #   Same PotPlayer gate, live media_files.txt queue, -BatchTimeoutSec 5400, Space/Enter, resume sidecar as fisheye batch.
 #   Startup: Purge-OldAvs.ps1 -KeepCount 50 under .\avs (standalone purge = full wipe).
-#   av1_qsv integer CFR (same as flat / fisheye): 24/25/30/50/60; NTSC 29.97 snapped to 30 (drop/dup, no blend).
+#   av1_qsv integer CFR (same as flat / fisheye): 24/25/30/50/60; NTSC 29.97 tagged 30 via AssumeFPS.
 #   Minute-segment encode bitrate (flat + fisheye pass-2): -SegmentVideoBitrateMbps, else
 #     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
@@ -161,9 +161,10 @@ Run sequence:
 #     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix); else Resolve-HybridWorkflowRoute:
 #     fisheye -> Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE
 #               -SegmentOutputDirectory F:\f1_media\3d_fullsbs_trans\hybrid
-#     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI);
-#               mono/narrow -> StackHorizontal Full SBS; already-wide SBS -> passthrough;
-#               convertfps=false (no AviSynth blend); QSV 29.97->30 is drop/dup only.
+#     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI).
+#               Same idea as flat's per-clip .avs (path + fps filled in), but this template is
+#               passthrough only: DirectShowSource + AssumeFPS integer + StackHorizontal if 2D.
+#               It does not run StreamTo3D 2D->3D / MDepan (unlike the flat GUI .avs).
 #               then Run-TranscodeFfmpeg -SegmentNameSuffix Full_SBS -OutputDirectory ...\hybrid
 #   Minute segments multiplexed to one folder (Skybox tokens): ...\hybrid\3d_op_%02d_Full_SBS.mkv /
 #     ...\hybrid\3d_op_%02d_LR_180_FISHEYE.mkv / ...\hybrid\3d_op_%02d_LR_180.mkv (as-is). Suffix switches keep the prior pair until the new encode
@@ -198,7 +199,7 @@ Run sequence:
 #   -InterClipWaitSec 0 disables inter-clip DLNA buffer (default 0 in script; set 60 if you want minute gap).
 #   Pass 1: Run-FisheyeV360.ps1 -LiteralPath ... -> fisheye_temp\{base}.fisheye.frag.mp4 (av1_qsv 50M fragmented)
 #     (no F:\f1_media\fisheye_test defaults; omitted -OutputDirectory writes beside the input)
-#     av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 snapped to 30 (QSV rejects 29.97; drop/dup, no blend).
+#     av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 tagged 30 via AssumeFPS (QSV rejects 29.97).
 #   Pass 2: Run-TranscodeFfmpeg.ps1 chase -> F:\f1_media\3d_fullsbs_trans\fisheye\3d_op_%02d_LR_180_FISHEYE.mkv (av1_qsv 75M, readrate 1)
 #     same integer CFR snap as pass 1 / flat.
 #     60-second DLNA segments: -segment_time 60 -segment_wrap 2 -reset_timestamps 1

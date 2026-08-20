@@ -16,7 +16,7 @@
   For .avs: ffprobe/resume rules use DirectShowSource path embedded in the AVS when present (fisheye_temp template AVS);
   otherwise finds source two folders up (..\\..\\); basename drops StreamTo3D., optional embedded media ext
   (e.g. .mp4 in name.mp4.avs), then .avs; flat DLNA segment mux always uses -readrate 1 (segment_wrap 2 viewing pace);
-  av1_qsv segment encode uses integer CFR (-r 24/25/30/50/60; NTSC 29.97 snapped to 30 — QSV rejects 29.97);
+  av1_qsv segment encode uses integer CFR (-r 24/25/30/50/60; NTSC 29.97 tagged 30 via AVS AssumeFPS — no fps filter);
   height/bitrate probes are logged only (legacy -re gates removed for flat path). Seek (-ss) is checked against ffprobe format=duration on the same probe path
   unless -NoClampSeek: if resume is past the usable end (duration minus 0.25s tail), ffmpeg is skipped (exit 0) so the
   orchestrator can treat the clip as done and continue the playlist. Pass -NoClampSeek to send the raw seek to ffmpeg instead.
@@ -616,13 +616,9 @@ function Get-QsvCfrOutputArgs {
         [bool] $Resample,
         [switch] $AllowVideoFilter
     )
-    # Drop/dup via fps= (no interpolation). Skip the filter when source is already integer
-    # so QSV does not run VPP frame-rate conversion (that path blends and looks blurred).
-    $outArgs = @('-r', $FpsArg, '-fps_mode', 'cfr')
-    if ($AllowVideoFilter -and $Resample) {
-        $outArgs = @('-vf', "fps=${FpsArg}:round=near,format=nv12") + $outArgs
-    }
-    return $outArgs
+    # Tag output CFR only. Do not insert -vf fps= — that plus -r makes QSV VPP interpolate (soft/ghosted).
+    # Hybrid/fisheye AVS AssumeFPS already reports an integer rate so input matches -r.
+    return @('-r', $FpsArg, '-fps_mode', 'cfr')
 }
 
 function Test-FisheyeTempTranscodeInput {
@@ -1418,20 +1414,19 @@ try {
         @('-c:a', 'copy')
     }
     # Prefer AVS fps over a growing mezzanine (ffprobe can return huge fractions like 11988/1).
-    # Integer CFR for QSV: drop/dup only when snapping 29.97->30 (no ConvertFPS / VPP blend).
+    # Integer CFR for QSV: AVS AssumeFPS tags 24/25/30/50/60; ffmpeg -r matches (no fps filter / VPP blend).
     $segmentFps = Resolve-QsvCfrFrameRateArg -AvsFullPath $fullInput -SourceMedia $sourceMedia -FfprobeExe $ffprobeExe -AsObject
-    $segmentFpsArgs = Get-QsvCfrOutputArgs -FpsArg $segmentFps.Arg -Resample:([bool]$segmentFps.Resample) -AllowVideoFilter
+    $segmentFpsArgs = Get-QsvCfrOutputArgs -FpsArg $segmentFps.Arg -Resample:([bool]$segmentFps.Resample)
     $argList += @(
         '-i', $fullInput,
         '-map', '0:v',
-        # Audio may be absent for some sources; map optionally.
         '-map', '0:a?',
         '-c:v', 'av1_qsv',
         '-preset', 'slow',
-        '-global_quality', '18',
         '-rc', 'cbr',
         '-b:v', "${segmentMbps}M",
-        '-maxrate', "${segmentMbps}M"
+        '-maxrate', "${segmentMbps}M",
+        '-pix_fmt', 'nv12'
     ) + $segmentFpsArgs + $segmentAudioArgs + $segmentMuxerOutArgs + @($outPath)
     }
     $all = @($ffmpegExe) + $argList
