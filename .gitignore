@@ -39,6 +39,7 @@ Desktop.ini
 # Temp test artifacts
 _obf_test_tmp.ps1
 _parse_check_tmp.ps1
+individual_transcode/_test_std_resolve.ps1
 
 # Large Cursor chat dumps (not source)
 ai/*.json
