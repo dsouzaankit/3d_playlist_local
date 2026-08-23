@@ -2,6 +2,11 @@
 # Faststart remux (moov at file head) only when codecs are incompatible with Loop Segments
 # AVFoundation passthrough (not H.264/HEVC + AAC). Those stay on the vanilla/original path
 # and need moov-at-head for WebDAV. Compatible files are skipped — the app exports them.
+# Double-click / direct run waits on Enter. Batch launchers pass -NoPause.
+
+param(
+    [switch] $NoPause
+)
 
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
@@ -305,3 +310,8 @@ Get-ChildItem -Path $InputDir -Include '*.ts', '*.mp4', '*.wmv', '*.mkv', '*.mov
 }
 
 Write-Host 'Selective batch complete (faststart only AVFoundation-incompatible MP4/MOV/M4V; vertical encode to standardized).'
+
+if (-not $NoPause) {
+    Write-Host ''
+    [void](Read-Host 'Press Enter to close')
+}

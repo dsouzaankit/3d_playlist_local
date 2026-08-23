@@ -618,7 +618,7 @@ $asisCopyScript = Resolve-BatchScriptPath -LocalPath $asisCopyScript -SyncSource
 
 # standardize vertical videos without blocking current script! (same as run_batch_convert_streamTo3D.ps1)
 $stdizeScript = Join-Path $playlistLocal 'selective_stdize.ps1'
-Start-Process pwsh.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$stdizeScript`"" -WorkingDirectory $playlistLocal
+Start-Process pwsh.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$stdizeScript`" -NoPause" -WorkingDirectory $playlistLocal
 if (Test-Path -LiteralPath $pythonExe) {
     & $pythonExe (Join-Path $playlistLocal 'generate_media_listings_lcl.py')
 } else {

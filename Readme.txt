@@ -235,6 +235,7 @@ Run sequence:
 # May not format vertical videos correctly!
 #
 # selective_stdize.ps1 (all 3 batch launchers start it beside media_files.txt, non-blocking):
+#   Direct run / double-click waits on Enter. Batches pass -NoPause so the window can close.
 #   Faststart: MP4/MOV/M4V in the parent media folder only when codecs are incompatible
 #     with Loop Segments AVFoundation passthrough (not H.264/HEVC + AAC). Those stay on
 #     the vanilla/original path and need moov-at-head for WebDAV/Skybox. Skip H.264/HEVC

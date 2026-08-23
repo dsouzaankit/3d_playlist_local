@@ -45,7 +45,7 @@ if (Test-Path -LiteralPath $purgeAvsScript -PathType Leaf) {
 
 # standardize vertical videos without blocking current script!
 $stdizeScript = Join-Path $playlistLocal 'selective_stdize.ps1'
-Start-Process pwsh.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$stdizeScript`"" -WorkingDirectory $playlistLocal
+Start-Process pwsh.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$stdizeScript`" -NoPause" -WorkingDirectory $playlistLocal
 # refresh ..\media_files.txt!
 & $pythonExe (Join-Path $playlistLocal 'generate_media_listings_lcl.py')
 
