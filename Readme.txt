@@ -235,9 +235,13 @@ Run sequence:
 # May not format vertical videos correctly!
 #
 # selective_stdize.ps1 (all 3 batch launchers start it beside media_files.txt, non-blocking):
-#   Faststart: every MP4/MOV/M4V in the parent media folder. If moov is not in the first 768 KB,
-#     remux -c copy -movflags +faststart to a sibling temp, then replace the source in place
-#     (same name/folder; no sidecar). Skip if moov is already at head. ts/wmv/mkv have no moov.
+#   Faststart: MP4/MOV/M4V in the parent media folder only when codecs are incompatible
+#     with Loop Segments AVFoundation passthrough (not H.264/HEVC + AAC). Those stay on
+#     the vanilla/original path and need moov-at-head for WebDAV/Skybox. Skip H.264/HEVC
+#     + AAC (or video-only) — the app exports those. MPEG-4 Visual / Part 2 (ffprobe mpeg4,
+#     FourCC mp4v) is incompatible; H.264 (MPEG-4 AVC / avc1) is compatible. If moov is not
+#     in the first 768 KB, remux -c copy -movflags +faststart and replace the source in place.
+#     Skip if moov is already at head. ts/wmv/mkv have no moov.
 #   Vertical encode (aspect < 1:1 only): hevc_qsv -> 3d_playlist_local\standardized\{name}.mp4
 #     with +faststart. Does not replace the original. Listings / transcode prefer that copy
 #     when present (Resolve-StandardizedMediaPath / generate_media_listings_lcl.py).

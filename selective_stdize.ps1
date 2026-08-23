@@ -1,6 +1,7 @@
 # Selective standardization: re-encode vertical (aspect < 1:1) media to a common MP4 layout.
-# Faststart (moov at file head) applies to every MP4/MOV/M4V in the media folder, not only
-# vertical clips. Existing standardized encodes without moov in the first 768 KB are remuxed.
+# Faststart remux (moov at file head) only when codecs are incompatible with Loop Segments
+# AVFoundation passthrough (not H.264/HEVC + AAC). Those stay on the vanilla/original path
+# and need moov-at-head for WebDAV. Compatible files are skipped — the app exports them.
 
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
@@ -75,6 +76,78 @@ function Test-FaststartContainer {
     param([string] $Extension)
     $ext = $Extension.ToLowerInvariant()
     return ($ext -eq '.mp4' -or $ext -eq '.mov' -or $ext -eq '.m4v')
+}
+
+function Get-AvFoundationStreamCodecs {
+    <#
+    .SYNOPSIS
+      Probe video/audio codec_name for Loop Segments AVFoundation passthrough
+      (CodecSupport.canPassthroughToMP4 + AAC audio).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string] $LiteralPath,
+        [string] $FfprobeExe
+    )
+    if ([string]::IsNullOrWhiteSpace($FfprobeExe) -or -not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
+        return $null
+    }
+    $jsonText = & $FfprobeExe -v error -show_entries stream=codec_type,codec_name -of json -- $LiteralPath 2>$null
+    if (-not $jsonText) { return $null }
+    try {
+        $json = $jsonText | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+    $video = $null
+    $audio = $null
+    foreach ($s in @($json.streams)) {
+        $kind = [string]$s.codec_type
+        $name = ([string]$s.codec_name).ToLowerInvariant()
+        if ($kind -eq 'video' -and [string]::IsNullOrWhiteSpace($video)) { $video = $name }
+        if ($kind -eq 'audio' -and [string]::IsNullOrWhiteSpace($audio)) { $audio = $name }
+    }
+    return [pscustomobject]@{ Video = $video; Audio = $audio }
+}
+
+function Test-AvFoundationStreamableCodecs {
+    param($Probe)
+    if ($null -eq $Probe -or [string]::IsNullOrWhiteSpace($Probe.Video)) {
+        return [pscustomobject]@{ Ok = $false; Reason = 'no video codec' }
+    }
+    $v = $Probe.Video
+    if ($v -ne 'h264' -and $v -ne 'hevc') {
+        return [pscustomobject]@{ Ok = $false; Reason = "video $v (need h264/hevc)" }
+    }
+    $audioOk = [string]::IsNullOrWhiteSpace($Probe.Audio) -or $Probe.Audio -eq 'aac' -or $Probe.Audio.StartsWith('aac_')
+    if (-not $audioOk) {
+        return [pscustomobject]@{ Ok = $false; Reason = "audio $($Probe.Audio) (need aac)" }
+    }
+    $audioNote = if ([string]::IsNullOrWhiteSpace($Probe.Audio)) { 'no audio' } else { $Probe.Audio }
+    return [pscustomobject]@{ Ok = $true; Reason = "$v + $audioNote" }
+}
+
+function Invoke-FaststartIfAvFoundationIncompatible {
+    param(
+        [Parameter(Mandatory)]
+        [string] $FFmpegPath,
+        [string] $FfprobeExe,
+        [Parameter(Mandatory)]
+        [string] $LiteralPath
+    )
+    $probe = Get-AvFoundationStreamCodecs -LiteralPath $LiteralPath -FfprobeExe $FfprobeExe
+    $gate = Test-AvFoundationStreamableCodecs -Probe $probe
+    if ($gate.Ok) {
+        Write-Host "Skip faststart (AVFoundation can stream: $($gate.Reason)): $LiteralPath"
+        return
+    }
+    if (Test-Mp4MoovAtHead -LiteralPath $LiteralPath) {
+        Write-Host "Faststart already present (vanilla codecs $($gate.Reason)): $LiteralPath"
+        return
+    }
+    Write-Host "moov not at head, AVFoundation-incompatible ($($gate.Reason)): $LiteralPath"
+    [void](Invoke-FaststartRemux -FFmpegPath $FFmpegPath -SourcePath $LiteralPath)
 }
 
 function Test-Mp4MoovAtHead {
@@ -156,9 +229,11 @@ if ($null -eq $widthPropId -or $null -eq $heightPropId) {
 $InputDir = '..\*'
 $OutputDir = 'standardized'
 $FFmpegPath = 'ffmpeg.exe'
+$ffprobeCmd = Get-Command ffprobe.exe -ErrorAction SilentlyContinue
+$FfprobeExe = if ($ffprobeCmd) { $ffprobeCmd.Source } else { $null }
 
-if (-not (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) {
-    Write-Warning 'ffprobe.exe not on PATH. Install ffmpeg or add its folder to PATH (needed for files on L:).'
+if (-not $FfprobeExe) {
+    Write-Warning 'ffprobe.exe not on PATH. Install ffmpeg or add its folder to PATH (needed for files on L:). Faststart remux skipped without a codec probe.'
 }
 
 if (-not (Test-Path $OutputDir)) {
@@ -173,12 +248,11 @@ Get-ChildItem -Path $InputDir -Include '*.ts', '*.mp4', '*.wmv', '*.mkv', '*.mov
 
     $isFaststartContainer = Test-FaststartContainer -Extension $_.Extension
     if ($isFaststartContainer) {
-        if (Test-Mp4MoovAtHead -LiteralPath $_.FullName) {
-            Write-Host "Faststart already present: $($_.Name)"
+        if (-not $FfprobeExe) {
+            Write-Host "Skip faststart (no ffprobe to check AVFoundation codecs): $($_.Name)"
         }
         else {
-            Write-Host "moov not at head: $($_.FullName)"
-            [void](Invoke-FaststartRemux -FFmpegPath $FFmpegPath -SourcePath $_.FullName)
+            Invoke-FaststartIfAvFoundationIncompatible -FFmpegPath $FFmpegPath -FfprobeExe $FfprobeExe -LiteralPath $_.FullName
         }
     }
 
@@ -200,12 +274,11 @@ Get-ChildItem -Path $InputDir -Include '*.ts', '*.mp4', '*.wmv', '*.mkv', '*.mov
     $DestinationPath = Join-Path -Path $OutputDir -ChildPath ($BaseNameNoQuote + $OutputExtension)
 
     if (Test-Path -LiteralPath $DestinationPath) {
-        if (Test-Mp4MoovAtHead -LiteralPath $DestinationPath) {
-            Write-Host "Already exists (faststart): $DestinationPath. Skipping."
+        if (-not $FfprobeExe) {
+            Write-Host "Already exists (no ffprobe; skip faststart check): $DestinationPath. Skipping encode."
         }
         else {
-            Write-Host "Already exists, moov not at head: $DestinationPath"
-            [void](Invoke-FaststartRemux -FFmpegPath $FFmpegPath -SourcePath $DestinationPath)
+            Invoke-FaststartIfAvFoundationIncompatible -FFmpegPath $FFmpegPath -FfprobeExe $FfprobeExe -LiteralPath $DestinationPath
         }
         return
     }
@@ -226,9 +299,9 @@ Get-ChildItem -Path $InputDir -Include '*.ts', '*.mp4', '*.wmv', '*.mkv', '*.mov
         Write-Host "  Faststart present (moov at head)."
     }
     else {
-        Write-Host "  Encode wrote moov at EOF; remuxing faststart."
+        Write-Host "  Encode wrote moov at EOF; remuxing faststart (hevc + aac)."
         [void](Invoke-FaststartRemux -FFmpegPath $FFmpegPath -SourcePath $OutputFile)
     }
 }
 
-Write-Host 'Selective batch complete (faststart all MP4/MOV/M4V; vertical encode to standardized).'
+Write-Host 'Selective batch complete (faststart only AVFoundation-incompatible MP4/MOV/M4V; vertical encode to standardized).'
