@@ -180,7 +180,8 @@ Run sequence:
 # FISHEYE workflow (v360 mezzanine — bypasses StreamTo3D GUI; no op_logs / ProgramData AVS)
 # =============================================================================
 # Recommended after setup: .\run_batch_fisheye_v360.ps1 beside media_files.txt
-#   Same sync/listings preamble as flat step 1; selective_stdize.ps1 via Start-Process pwsh (visible, non-blocking; survives batch timeout/kill).
+#   Same sync/listings preamble as flat step 1; selective_stdize.ps1 via Start-Process pwsh
+#     (visible, non-blocking; survives batch timeout/kill). See selective_stdize notes below.
 #   Opens PotPlayer fisheye_batch_potplayer.dpl for start clip.
 #   fisheye_batch.m3u / fisheye_batch_potplayer.dpl rebuilt each batch run from media_files.txt; when the
 #   eligible path list is unchanged (same paths, same order), prior playname/playtime/topindex are preserved
@@ -232,6 +233,17 @@ Run sequence:
 # StreamTo3D automation + avs transfer cannot run in parallel, else .avs mixes between multiple destination folders!
 # Filenames containing `3d` are ignored by StreamTo3D regex: (?i).*((3D)|(\.SBS\.)|(\.TB\.)|(\.HSBS\.)|(\.HTB\.)|(\.3DA\.)).*
 # May not format vertical videos correctly!
+#
+# selective_stdize.ps1 (all 3 batch launchers start it beside media_files.txt, non-blocking):
+#   Faststart: every MP4/MOV/M4V in the parent media folder. If moov is not in the first 768 KB,
+#     remux -c copy -movflags +faststart to a sibling temp, then replace the source in place
+#     (same name/folder; no sidecar). Skip if moov is already at head. ts/wmv/mkv have no moov.
+#   Vertical encode (aspect < 1:1 only): hevc_qsv -> 3d_playlist_local\standardized\{name}.mp4
+#     with +faststart. Does not replace the original. Listings / transcode prefer that copy
+#     when present (Resolve-StandardizedMediaPath / generate_media_listings_lcl.py).
+#   No IPA change: Loop Segments does not remux vanilla; loop/op_*.mp4 already faststart on device.
+#     In-place archive faststart helps WebDAV/Skybox of those files. Replacing a pCloud object
+#     invalidates an in-progress sparse vanilla resume for that file.
 # Standardization using ffmpeg appears thread-safe but can overload system!
 # Vertical videos will be gradually standardized and prioritized during 2nd flat batch attempt (after 1st successful attempt)!
 # 'media_files.txt' will auto-refresh on batch runs!
