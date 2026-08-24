@@ -7,6 +7,7 @@ Run sequence:
 #                      (+ parent run_batch_*.ps1 launchers beside media_files.txt)
 #   Other deps:        P:\all_scripts\py_venv1, P:\all_scripts\setup_venv.bat, P:\all_scripts\AutoHotkey
 #                      Skybox PC client helpers: git submodule Skybox_vr_pc (github.com/dsouzaankit/skybox-vr-pc)
+#                      After clone: git submodule update --init. Override root with SKYBOX_VR_PC_ROOT.
 #   Context menu:      run individual_transcode\Install-ContextMenu.ps1 once per user from the deploy copy you want Explorer to use
 # Logs/cleanup:  individual_transcode\LOGS.md (full catalog + purge commands);
 #                  Cleanup-TranscodeLogs.ps1 (all deploy copies' *.log by default, including media_folder_watcher / hybrid;
@@ -57,11 +58,14 @@ Run sequence:
 #   Run quit (all 3 finally: success / abort / timeout): Invoke-DlnaWorkflowQuitCleanup removes
 #     Skybox Add-folders 3d_fullsbs_trans and the Skybox_vr_pc AirScreen share (p_cld_media).
 #     Does not touch Loop Segments pcld_ios_media / L: rclone nodes. Then quits Skybox only if this run
-#     started it (already-running Skybox is left alone), obfuscates media and .avs to <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json;
+#     started it (already-running Skybox is left alone; the started-by-workflow marker is kept when Skybox
+#     is already up so hidden pass-2 / leaf children do not wipe it). Obfuscates media and .avs to <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json;
 #     includes fisheye_temp\avs\*.avs), then Remove-DlnaSegmentRootSubst (clears dummy subst M:
 #     + junction; Explorer icon goes away). Idempotent. Next start recreates dummy M:.
 #     Hybrid/fisheye robocopy re-invoke wrapper also runs quit cleanup so stale media-side
 #     deploy copies cannot leave M: subst / clear segment names behind.
+#     Explorer context-menu quit obfuscates the AppData store before the close pause. It skips that
+#     obfuscate only when a follow-up batch process actually started (that process quits later).
 #     Hard-kill of the console window still skips finally (no cleanup until next manual
 #     Cleanup-DlnaSegmentRoot / quit cleanup).
 #       flat:   Run-TranscodeOrchestrator.ps1
@@ -88,10 +92,10 @@ Run sequence:
 # |---------------|-------------------|----------------|-------|-------|---------------------|
 # | Flat step 1 (StreamTo3D GUI) | run_batch_convert_streamTo3D.ps1 | that console | — | — | no key poll (Ctrl+C only) |
 # | Flat transcode queue | Run-TranscodeOrchestrator.ps1 | orchestrator window | pause leaf DLNA export | cancel current child clip | inline ReadKey (Space + Enter same handler) |
-# | Flat context menu .avs | Run-TranscodeFfmpeg.ps1 | visible transcode console | pause leaf export | — | Invoke-TranscodeConsoleKeyPoll (Space only) + deadline |
+# | Flat context menu .avs | Run-TranscodeFfmpeg.ps1 | visible transcode console | pause leaf export | cancel clip (AllowEnterCancel / -ContextMenu) | Invoke-TranscodeConsoleKeyPoll + deadline |
 # | Fisheye batch queue | run_batch_fisheye_v360.ps1 | batch window | pause leaf export | cancel clip or inter-clip wait | Invoke-BatchConsoleControlPoll |
 # | Fisheye batch prepare (per clip) | Run-V360PrepareFisheye.ps1 -ChaseSync (hidden) | batch window (not prepare) | same as batch row | same as batch row | batch parent polls; hidden shell Space-only |
-# | Fisheye context menu | Run-V360PrepareFisheye.ps1 (visible) | prepare window | pause during pass-2 rounds | error/cancel paths only | Invoke-TranscodeConsoleKeyPoll in prepare waits |
+# | Fisheye context menu | Run-V360PrepareFisheye.ps1 (visible) | prepare window | pause during pass-2 rounds | cancel clip (AllowEnterCancel when not -ChaseWorker) | Invoke-TranscodeConsoleKeyPoll in prepare waits |
 # | Hybrid batch queue | run_batch_vr_hybrid.ps1 | batch window | pause leaf export | cancel clip or inter-clip wait | Invoke-BatchConsoleControlPoll (same as fisheye) |
 # | Fisheye / flat pass-2 inline | Run-TranscodeFfmpeg.ps1 (inside prepare or child) | parent control window | pause while export ffmpeg running | cancel when parent wires -AllowEnterCancel | Invoke-TranscodeConsoleKeyPoll + -WorkflowDeadlineUtc |
 #
@@ -101,7 +105,8 @@ Run sequence:
 #   Flat orchestrator: one long export ffmpeg per .avs (pause mid segment-mux).
 #   Fisheye pass-2: ~60s chase rounds (-readrate 1); pause only while a round's export process is alive.
 #   Between chase rounds or while only watching segments already on disk: Space may report no export running.
-# Enter: stop prepare shell + ffmpeg tree (fisheye batch) or orchestrator child (flat queue); exit 130 / batch cancel.
+# Enter: stop prepare shell + ffmpeg tree (fisheye batch), orchestrator child (flat queue), or Explorer
+#   context-menu transcode/prepare (-ContextMenu / -AllowEnterCancel); exit 130 / batch cancel.
 # Deadline: -BatchTimeoutSec / -WorkflowTimeoutSec / -WorkflowDeadlineUtc still tick while export is paused (exit 124).
 # Messages: [leaf-export] Paused/Resumed N DLNA export ffmpeg process(es)...
 #
@@ -142,6 +147,7 @@ Run sequence:
 #   Each .avs -> Run-TranscodeFfmpeg.ps1 child -> 3d_op_%02d_Full_SBS.mkv
 #   av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 tagged 30 via AssumeFPS (QSV rejects 29.97).
 #   DLNA segments: -segment_time 60 -segment_wrap 2 (~60s per file, two-slot rotation; one encode per clip)
+#   Clips shorter than 60s only mux 3d_op_00; Copy-DlnaWrapSlotIfShortClip copies 00 -> 01 so both slots refresh
 #   -BatchTimeoutSec 5400 default (entire queue wall-clock; same semantics as fisheye batch)
 #   Child wait heartbeat: source_duration/5s per clip (Get-FisheyePrepareHeartbeat.ps1; -PrepareHeartbeatDivisor)
 #   Keys: orchestrator window — Space=pause leaf export; Enter=cancel clip (see top matrix). Deadline applies while paused.
@@ -169,7 +175,9 @@ Run sequence:
 #   Per clip probes format/stream bitrate + v:0 codec_name (Resolve-HybridWorkflowRoute.ps1):
 #     flat when: (<4 Mbps AND not hevc/av1) OR (<2 Mbps AND hevc/av1); otherwise fisheye
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) -> Run-SegmentCopyAsIs (-c copy -re) into
-#     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix); else Resolve-HybridWorkflowRoute:
+#     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix). As-is remux ignores encode
+#     bitrate / -maxrate caps; -BatchTimeoutSec / -WorkflowDeadlineUtc still apply; -TranscodeTimeoutSec -1.
+#     Else Resolve-HybridWorkflowRoute:
 #     fisheye -> Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE
 #               -SegmentOutputDirectory M:\m1_media\3d_fullsbs_trans\hybrid
 #     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI).
@@ -179,6 +187,8 @@ Run sequence:
 #               then Run-TranscodeFfmpeg -SegmentNameSuffix Full_SBS -OutputDirectory ...\hybrid
 #   Minute segments multiplexed to one folder (Skybox tokens): ...\hybrid\3d_op_%02d_Full_SBS.mkv /
 #     ...\hybrid\3d_op_%02d_LR_180_FISHEYE.mkv / ...\hybrid\3d_op_%02d_LR_180.mkv (as-is). Suffix switches keep the prior pair until the new encode
+#   Clips / chase rounds shorter than 60s: Copy-DlnaWrapSlotIfShortClip copies the written slot onto the other
+#     (00->01 or 01->00) so wrap-2 always has two files (flat Full_SBS, fisheye pass-2, as-is LR_180)
 #     writes (>=1 MiB); Sync-DlnaHybridSegmentHandoff then retires inactive leaves one-by-one toward two
 #     playable files; clip end -Finalize clears other-suffix leaves only when active has >=1 ready file
 #     (otherwise holds the prior pair so hybrid is never emptied).
@@ -205,8 +215,9 @@ Run sequence:
 #   DPL playtime (first batch clip only, 30s backoff): pass-1 mezzanine -SsSec; pass-2 from mezzanine t=0.
 #   -SkipPotPlayerSeek: pass-1 and pass-2 start at 0s for every clip.
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) -> Run-SegmentCopyAsIs (-c copy -re) into
-#     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix; skips prepare/chase); else
-#     Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync (inline pass-2 in hidden prepare shell).
+#     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix; skips prepare/chase). As-is
+#     remux ignores encode bitrate / -maxrate caps; batch deadline still applies.
+#     Else Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync (inline pass-2 in hidden prepare shell).
 #   -InterClipWaitSec 0 disables inter-clip DLNA buffer (default 0 in script; set 60 if you want minute gap).
 #   Pass 1: Run-FisheyeV360.ps1 -LiteralPath ... -> fisheye_temp\{base}.fisheye.frag.mp4 (av1_qsv 50M fragmented)
 #     (no F:\f1_media\fisheye_test defaults; omitted -OutputDirectory writes beside the input)
@@ -215,7 +226,8 @@ Run sequence:
 #     same integer CFR snap as pass 1 / flat.
 #     60-second DLNA segments: -segment_time 60 -segment_wrap 2 -reset_timestamps 1
 #     Chase (fisheye_temp\avs): each round -t 60 max; alternates -segment_start_number 0 then 1
-#       (short mezzanine-edge rounds still overwrite both slots; sibling file stays playable)
+#     After a round (or tail mux) shorter than 60s: copy that slot onto the other (00<->01)
+#       so both 3d_op_00/01_LR_180_FISHEYE.mkv refresh (short clips never open the second mux file)
 #     Tail refresh at chase end may re-mux up to ~120s from clip tail when last round <60s
 #     Context-menu / -ChaseWorker: same chase logic; see individual_transcode\LOGS.md
 #   AVS: fisheye_temp\avs\StreamTo3D.fisheye_temp.{source}.avs (passthrough template; no StreamTo3D MDepan)
@@ -225,7 +237,7 @@ Run sequence:
 #     pass-1 RememberFiles resume (+ 5s key override); pass-2 hidden background worker (shared deadline; TranscodeTimeoutSec -1)
 #     prepare window wait heartbeat: source_duration/5s (Get-FisheyePrepareHeartbeat.ps1; same as batch) + chase transcript tail
 #   Keys: batch control window — Space=pause leaf export; Enter=cancel clip/batch (see top matrix). Hidden prepare does not receive keys.
-#     prepare window waits for hidden pass-2 worker then auto-closes in 8s on success (Enter only on error)
+#     prepare window waits for hidden pass-2 worker then auto-closes in 8s on success (Enter cancels while waiting)
 #     on success with 2+ clips in media_files.txt: 3d_playlist_local\run_batch_fisheye_v360.ps1 -ResumeAfter (SkipPotPlayer, SkipPotPlayerSeek; no PotPlayer gate); last clip wraps to first; see fisheye_context_handoff.log
 #     pass-2 worker is detached while prepare waits (closing prepare early does not stop pass-2)
 
