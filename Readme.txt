@@ -6,6 +6,7 @@ Run sequence:
 #   Deploy:            P:\all_scripts\3d_playlist_local -> each {media}\3d_playlist_local
 #                      (+ parent run_batch_*.ps1 launchers beside media_files.txt)
 #   Other deps:        P:\all_scripts\py_venv1, P:\all_scripts\setup_venv.bat, P:\all_scripts\AutoHotkey
+#                      Skybox PC client helpers: git submodule Skybox_vr_pc (github.com/dsouzaankit/skybox-vr-pc)
 #   Context menu:      run individual_transcode\Install-ContextMenu.ps1 once per user from the deploy copy you want Explorer to use
 # Logs/cleanup:  individual_transcode\LOGS.md (full catalog + purge commands);
 #                  Cleanup-TranscodeLogs.ps1 (all deploy copies' *.log by default, including media_folder_watcher / hybrid;
@@ -51,7 +52,7 @@ Run sequence:
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media and .avs (via .dlna_obf_map.json) from a prior quit.
 #     Also starts the Skybox PC client if it is idle (locate exe / Steam, hide to tray, wait for
-#     :8018 via Skybox_vr_pc — same idea as the Loop Segments companion), maps the AirScreen share
+#     :8018 via the Skybox_vr_pc submodule — same idea as the Loop Segments companion), maps the AirScreen share
 #     from skybox_vr_pc.config.json, and adds 3d_fullsbs_trans Add folders.
 #   Run quit (all 3 finally: success / abort / timeout): Invoke-DlnaWorkflowQuitCleanup removes
 #     Skybox Add-folders 3d_fullsbs_trans and the Skybox_vr_pc AirScreen share (p_cld_media).
