@@ -29,17 +29,20 @@ Run sequence:
 #   Hung read on a dead share: no short "drive lost" timeout. -BatchTimeoutSec (default 5400s)
 #     wall-clock deadline kills the child/ffmpeg (exit 124) and stops the batch. Enter cancel = 130.
 #   No automatic remount of source UNC/mapped drives. Ensure-DlnaSegmentRoot only keeps dummy
-#     subst F: for DLNA *output*, not input media.
+#     subst M: for DLNA *output*, not input media.
 #
-# DLNA segment root (flat / fisheye / hybrid): F:\f1_media\3d_fullsbs_trans
-#   Skybox web-client share should keep pointing at that path.
+# DLNA segment root (flat / fisheye / hybrid): M:\m1_media\3d_fullsbs_trans
+#   Skybox PC client share should keep pointing at that path.
 #   Ensure-DlnaSegmentRoot always stores under %AppData%\3d_playlist_local. During the run,
-#   Explorer dummy F: is subst'd to %AppData%\f1_media_F_subst + junction so the Skybox path
-#   stays F:\f1_media\3d_fullsbs_trans. Never writes onto a real F: volume. If a real F: (or a
-#   subst to some other folder) is already mapped, Ensure-DlnaSegmentRoot throws and the
-#   workflow stops — unmount it so the dummy letter can be created. Do not pick another
-#   drive letter on conflict: Skybox's share, Explorer context-menu registry, and script
-#   paths are all fixed at F:\f1_media\3d_fullsbs_trans.
+#   Explorer dummy M: is subst'd to %AppData%\m1_media_dlna_subst + junction so the Skybox path
+#   stays M:\m1_media\3d_fullsbs_trans. Never writes onto a real M: volume. If a real M: (or a
+#   subst to some other folder) is already mapped, a free D–Z letter is chosen for that run
+#   ({letter}:\m1_media\3d_fullsbs_trans). Ensure-DlnaSegmentRoot starts the Skybox PC client if
+#   idle, then updates Add folders (remove stale 3d_fullsbs_trans / old k1_media / f1_media entries,
+#   add the live dummy path). If Skybox cannot be started, the console warns you to add that path.
+#   Set 3D_PLAYLIST_SKIP_SKYBOX=1 to skip launching Skybox (mappings still sync if it is already up).
+#   All three workflows (flat orchestrator, fisheye batch, hybrid batch) call
+#   Ensure-DlnaSegmentRoot and write under the mapped letter.
 #   av1_qsv GPU encode stays on for all minute-segment exports (flat DLNA, fisheye pass-1+2,
 #     hybrid routes). Encoder is still -c:v av1_qsv CBR; only fps resample was removed.
 #     Integer CFR 24/25/30/50/60. NTSC 29.97/23.976/59.94 tagged 30/24/60 via AVS AssumeFPS
@@ -47,12 +50,17 @@ Run sequence:
 #     and look soft). QSV rejects NTSC rates.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media and .avs (via .dlna_obf_map.json) from a prior quit.
-#   Run quit (all 3 finally): Invoke-DlnaWorkflowQuitCleanup obfuscates media and .avs to
-#     <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json; includes fisheye_temp\avs\*.avs),
-#     then Remove-DlnaSegmentRootSubst (clears dummy subst F: + junction; Explorer icon goes away).
-#     Idempotent. Next start recreates dummy F:.
+#     Also starts the Skybox PC client if it is idle (locate exe / Steam, hide to tray, wait for
+#     :8018 via Skybox_vr_pc — same idea as the Loop Segments companion), maps the AirScreen share
+#     from skybox_vr_pc.config.json, and adds 3d_fullsbs_trans Add folders.
+#   Run quit (all 3 finally: success / abort / timeout): Invoke-DlnaWorkflowQuitCleanup removes
+#     Skybox Add-folders 3d_fullsbs_trans and the Skybox_vr_pc AirScreen share (p_cld_media).
+#     Does not touch Loop Segments pcld_ios_media / L: rclone nodes. Then quits Skybox only if this run
+#     started it (already-running Skybox is left alone), obfuscates media and .avs to <sha256(relativePath)>.tmp (scrambled .dlna_obf_map.json;
+#     includes fisheye_temp\avs\*.avs), then Remove-DlnaSegmentRootSubst (clears dummy subst M:
+#     + junction; Explorer icon goes away). Idempotent. Next start recreates dummy M:.
 #     Hybrid/fisheye robocopy re-invoke wrapper also runs quit cleanup so stale media-side
-#     deploy copies cannot leave F: subst / clear segment names behind.
+#     deploy copies cannot leave M: subst / clear segment names behind.
 #     Hard-kill of the console window still skips finally (no cleanup until next manual
 #     Cleanup-DlnaSegmentRoot / quit cleanup).
 #       flat:   Run-TranscodeOrchestrator.ps1
@@ -141,7 +149,7 @@ Run sequence:
 #   Context menu (Install-ContextMenu.ps1):
 #     .mp4/.mkv/.mov/.m4v/.avi/.wmv/.ts/.m2ts/.webm -> flat or fisheye prepare (RememberFiles + 5s key override; standardized if present)
 #     .avs -> flat SBS transcode; successful .avs may hand off to orchestrator
-#   Output: F:\f1_media\3d_fullsbs_trans\flat\3d_op_%02d_Full_SBS.mkv
+#   Output: M:\m1_media\3d_fullsbs_trans\flat\3d_op_%02d_Full_SBS.mkv
 #   AVS purge: Purge-OldAvs.ps1 — workflows keep newest 50 under .\avs at start of
 #     run_batch_convert_streamTo3D.ps1, Run-TranscodeOrchestrator.ps1, and run_batch_vr_hybrid.ps1;
 #     running Purge-OldAvs.ps1 alone does a full .\avs purge
@@ -162,7 +170,7 @@ Run sequence:
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) -> Run-SegmentCopyAsIs (-c copy -re) into
 #     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix); else Resolve-HybridWorkflowRoute:
 #     fisheye -> Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE
-#               -SegmentOutputDirectory F:\f1_media\3d_fullsbs_trans\hybrid
+#               -SegmentOutputDirectory M:\m1_media\3d_fullsbs_trans\hybrid
 #     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI).
 #               Same idea as flat's per-clip .avs (path + fps filled in), but this template is
 #               passthrough only: DirectShowSource + AssumeFPS integer + StackHorizontal if 2D.
@@ -180,8 +188,7 @@ Run sequence:
 # FISHEYE workflow (v360 mezzanine — bypasses StreamTo3D GUI; no op_logs / ProgramData AVS)
 # =============================================================================
 # Recommended after setup: .\run_batch_fisheye_v360.ps1 beside media_files.txt
-#   Same sync/listings preamble as flat step 1; selective_stdize.ps1 via Start-Process pwsh
-#     (visible, non-blocking; survives batch timeout/kill). See selective_stdize notes below.
+#   Same sync/listings preamble as flat step 1; selective_stdize.ps1 via Start-Process pwsh (visible, non-blocking; survives batch timeout/kill).
 #   Opens PotPlayer fisheye_batch_potplayer.dpl for start clip.
 #   fisheye_batch.m3u / fisheye_batch_potplayer.dpl rebuilt each batch run from media_files.txt; when the
 #   eligible path list is unchanged (same paths, same order), prior playname/playtime/topindex are preserved
@@ -203,7 +210,7 @@ Run sequence:
 #   Pass 1: Run-FisheyeV360.ps1 -LiteralPath ... -> fisheye_temp\{base}.fisheye.frag.mp4 (av1_qsv 50M fragmented)
 #     (no F:\f1_media\fisheye_test defaults; omitted -OutputDirectory writes beside the input)
 #     av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 tagged 30 via AssumeFPS (QSV rejects 29.97).
-#   Pass 2: Run-TranscodeFfmpeg.ps1 chase -> F:\f1_media\3d_fullsbs_trans\fisheye\3d_op_%02d_LR_180_FISHEYE.mkv (av1_qsv 75M, readrate 1)
+#   Pass 2: Run-TranscodeFfmpeg.ps1 chase -> M:\m1_media\3d_fullsbs_trans\fisheye\3d_op_%02d_LR_180_FISHEYE.mkv (av1_qsv 75M, readrate 1)
 #     same integer CFR snap as pass 1 / flat.
 #     60-second DLNA segments: -segment_time 60 -segment_wrap 2 -reset_timestamps 1
 #     Chase (fisheye_temp\avs): each round -t 60 max; alternates -segment_start_number 0 then 1
@@ -233,22 +240,6 @@ Run sequence:
 # StreamTo3D automation + avs transfer cannot run in parallel, else .avs mixes between multiple destination folders!
 # Filenames containing `3d` are ignored by StreamTo3D regex: (?i).*((3D)|(\.SBS\.)|(\.TB\.)|(\.HSBS\.)|(\.HTB\.)|(\.3DA\.)).*
 # May not format vertical videos correctly!
-#
-# selective_stdize.ps1 (all 3 batch launchers start it beside media_files.txt, non-blocking):
-#   Direct run / double-click waits on Enter. Batches pass -NoPause so the window can close.
-#   Faststart: MP4/MOV/M4V in the parent media folder only when codecs are incompatible
-#     with Loop Segments AVFoundation passthrough (not H.264/HEVC + AAC). Those stay on
-#     the vanilla/original path and need moov-at-head for WebDAV/Skybox. Skip H.264/HEVC
-#     + AAC (or video-only) — the app exports those. MPEG-4 Visual / Part 2 (ffprobe mpeg4,
-#     FourCC mp4v) is incompatible; H.264 (MPEG-4 AVC / avc1) is compatible. If moov is not
-#     in the first 768 KB, remux -c copy -movflags +faststart and replace the source in place.
-#     Skip if moov is already at head. ts/wmv/mkv have no moov.
-#   Vertical encode (aspect < 1:1 only): hevc_qsv -> 3d_playlist_local\standardized\{name}.mp4
-#     with +faststart. Does not replace the original. Listings / transcode prefer that copy
-#     when present (Resolve-StandardizedMediaPath / generate_media_listings_lcl.py).
-#   No IPA change: Loop Segments does not remux vanilla; loop/op_*.mp4 already faststart on device.
-#     In-place archive faststart helps WebDAV/Skybox of those files. Replacing a pCloud object
-#     invalidates an in-progress sparse vanilla resume for that file.
 # Standardization using ffmpeg appears thread-safe but can overload system!
 # Vertical videos will be gradually standardized and prioritized during 2nd flat batch attempt (after 1st successful attempt)!
 # 'media_files.txt' will auto-refresh on batch runs!

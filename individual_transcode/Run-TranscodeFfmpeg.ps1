@@ -57,7 +57,7 @@
   Seek in milliseconds when >= 0. Default -1 reads RememberFiles registry position (else 0 ms).
 
 .PARAMETER OutputDirectory
-  Output folder. Default: F:\f1_media\3d_fullsbs_trans\flat (minute segments). Fisheye pass-2 /
+  Output folder. Default: M:\m1_media\3d_fullsbs_trans\flat (minute segments). Fisheye pass-2 /
   prepare pass -SegmentOutputDirectory / -OutputDirectory for ...\fisheye. The file name pattern is fixed
   (see $HardcodedOutputFilePattern below).
 
@@ -147,7 +147,7 @@
 param(
     [Parameter(Mandatory = $false)]
     [string] $LiteralPath,
-    [string] $OutputDirectory = 'F:\f1_media\3d_fullsbs_trans\flat',
+    [string] $OutputDirectory = 'M:\m1_media\3d_fullsbs_trans\flat',
     [int] $SsMsOverride = -1,
     [string] $Ffmpeg = 'ffmpeg',
     [string] $LogFile = '',
@@ -214,9 +214,12 @@ $leafFfmpegControlScript = Join-Path $thisScriptDir 'Invoke-LeafFfmpegControl.ps
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
     . $leafFfmpegControlScript
 }
-# Recreate dummy F:\f1_media\3d_fullsbs_trans (Skybox DLNA path) via %AppData% junction+subst.
+# Recreate dummy M:\m1_media\3d_fullsbs_trans (Skybox DLNA path) via %AppData% junction+subst.
 if (Get-Command Ensure-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
     [void](Ensure-DlnaSegmentRoot -Force)
+}
+if (Get-Command Convert-DlnaPlaceholderSharePath -ErrorAction SilentlyContinue) {
+    $OutputDirectory = Convert-DlnaPlaceholderSharePath -Path $OutputDirectory
 }
 
 # Segmented output pattern; ffmpeg rotates 2 segment files (wrap 2). Skybox suffixes: LR_180_FISHEYE / Full_SBS.

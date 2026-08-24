@@ -1521,6 +1521,8 @@ if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
 }
 if (Get-Command Ensure-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
     [void](Ensure-DlnaSegmentRoot -Force)
+} else {
+    throw 'Ensure-DlnaSegmentRoot not found (Invoke-LeafFfmpegControl.ps1). Dummy K: DLNA root is required for the flat workflow.'
 }
 
 $orchestratorStartUtc = Get-OrchestratorStartTimeUtc
@@ -1826,8 +1828,10 @@ while (-not $cancelled) {
     $childSegmentSuffix = if ($Fisheye.IsPresent) { 'LR_180_FISHEYE' } else { 'Full_SBS' }
     $childSegmentDir = if (Get-Command Get-DlnaSegmentOutputDirectory -ErrorAction SilentlyContinue) {
         Get-DlnaSegmentOutputDirectory -Kind $(if ($Fisheye.IsPresent) { 'fisheye' } else { 'flat' })
+    } elseif (Get-Command Get-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
+        Join-Path (Get-DlnaSegmentRoot) $(if ($Fisheye.IsPresent) { 'fisheye' } else { 'flat' })
     } else {
-        Join-Path 'F:\f1_media\3d_fullsbs_trans' $(if ($Fisheye.IsPresent) { 'fisheye' } else { 'flat' })
+        throw 'Get-DlnaSegmentOutputDirectory not found; cannot resolve flat/fisheye DLNA output under dummy M:.'
     }
     $argList = New-TranscodeChildPowerShellArgs -TranscodeScript $TranscodeScript -InputPath $full `
         -OrchestratorPid $PID -OrchestratorStartTimeUtc $orchestratorStartUtc -Fisheye:$Fisheye.IsPresent `

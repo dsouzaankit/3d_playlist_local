@@ -42,7 +42,7 @@ if ((Split-Path -Leaf $scriptDir) -ieq '3d_playlist_local') {
 }
 $syncSource = 'P:\all_scripts\3d_playlist_local'
 $pythonExe = 'P:\all_scripts\py_venv1\Scripts\python.exe'
-# Ensure Skybox DLNA root (dummy subst F: + AppData store) before any Join-Path on F:\... (pwsh validates drive letters).
+# Ensure Skybox DLNA root (dummy subst M: + AppData store) before any Join-Path on M:\... (pwsh validates drive letters).
 $leafEarly = Join-Path $syncSource 'individual_transcode\Invoke-LeafFfmpegControl.ps1'
 if (-not (Test-Path -LiteralPath $leafEarly -PathType Leaf)) {
     $leafEarly = Join-Path $playlistLocal 'individual_transcode\Invoke-LeafFfmpegControl.ps1'
@@ -54,7 +54,7 @@ if (Get-Command Ensure-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
     [void](Ensure-DlnaSegmentRoot -Force)
     $fisheyeTempRoot = Get-FisheyeTempRoot
 } else {
-    $fisheyeTempRoot = 'F:\f1_media\3d_fullsbs_trans\fisheye_temp'
+    throw 'Ensure-DlnaSegmentRoot not found (Invoke-LeafFfmpegControl.ps1). Dummy K: DLNA root is required for the fisheye workflow.'
 }
 $fisheyeAvsDir = [System.IO.Path]::Combine($fisheyeTempRoot, 'avs')
 $prepareScript = Join-Path $playlistLocal 'individual_transcode\Run-V360PrepareFisheye.ps1'
@@ -822,13 +822,17 @@ Write-Host "Pass 1:          av1_qsv 50M fragmented mezzanine"
 Write-Host "Pass 2:          av1_qsv 75M DLNA segments (-readrate 1 viewing pace, preset slow)"
 $fisheyeSegmentOutDir = if (Get-Command Get-DlnaSegmentOutputDirectory -ErrorAction SilentlyContinue) {
     Get-DlnaSegmentOutputDirectory -Kind fisheye
+} elseif (Get-Command Get-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
+    Join-Path (Get-DlnaSegmentRoot) 'fisheye'
 } else {
-    Join-Path 'F:\f1_media\3d_fullsbs_trans' 'fisheye'
+    throw 'Get-DlnaSegmentOutputDirectory not found; cannot resolve fisheye DLNA output under dummy M:.'
 }
 $hybridSegmentOutDir = if (Get-Command Get-DlnaSegmentOutputDirectory -ErrorAction SilentlyContinue) {
     Get-DlnaSegmentOutputDirectory -Kind hybrid
+} elseif (Get-Command Get-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
+    Join-Path (Get-DlnaSegmentRoot) 'hybrid'
 } else {
-    Join-Path 'F:\f1_media\3d_fullsbs_trans' 'hybrid'
+    throw 'Get-DlnaSegmentOutputDirectory not found; cannot resolve hybrid DLNA output under dummy M:.'
 }
 Write-Host "Fisheye DLNA:    $fisheyeSegmentOutDir\3d_op_%02d_LR_180_FISHEYE.mkv"
 Write-Host "As-is DLNA:      $hybridSegmentOutDir\3d_op_%02d_LR_180.mkv (-c copy -re)"
@@ -1110,7 +1114,8 @@ try {
                 $asisArgs += @('-BatchStdOutLog', $childLogs.StdOut)
                 Clear-BatchPendingConsoleKeys
                 $childProc = Start-BatchHiddenPowerShellFile -Arguments $asisArgs `
-                    -WorkingDirectory $playlistLocal -ShellExe $batchShellExe
+                    -WorkingDirectory $playlistLocal -ShellExe $batchShellExe `
+                    -RedirectStandardError $childLogs.StdErr
                 if ($null -eq $childProc) {
                     throw 'Could not start as-is segment copy shell.'
                 }
@@ -1141,7 +1146,8 @@ try {
                 $prepareArgs += @('-BatchStdOutLog', $childLogs.StdOut)
                 Clear-BatchPendingConsoleKeys
                 $childProc = Start-BatchHiddenPowerShellFile -Arguments $prepareArgs `
-                    -WorkingDirectory $playlistLocal -ShellExe $batchShellExe
+                    -WorkingDirectory $playlistLocal -ShellExe $batchShellExe `
+                    -RedirectStandardError $childLogs.StdErr
                 if ($null -eq $childProc) {
                     throw 'Could not start prepare/chase shell.'
                 }
