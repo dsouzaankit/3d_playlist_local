@@ -137,7 +137,11 @@ function Start-SkyboxPcClientIfNeeded {
         $already = [bool](Test-SkyboxPcClientRunning)
     }
     if ($already) {
-        try { Clear-SkyboxPcClientStartedMarker } catch { }
+        # Skybox is already up (parent workflow or a prior session). Do not clear the
+        # playlist started-by-workflow marker — hidden pass-2 / leaf ffmpeg children
+        # would wipe it and context-menu quit would leave Skybox running.
+        [void](Invoke-PlaylistSkyboxVrPcMap)
+        return $true
     }
     $ok = $false
     try {
@@ -146,16 +150,14 @@ function Start-SkyboxPcClientIfNeeded {
         Write-Warning ("Skybox PC client start failed: {0}" -f $_.Exception.Message)
         return $false
     }
-    if (-not $already) {
-        $weStarted = $false
-        if (Get-Command Test-SkyboxVrPcStartedByThisSession -ErrorAction SilentlyContinue) {
-            $weStarted = [bool](Test-SkyboxVrPcStartedByThisSession)
-        } elseif (Get-Command Test-SkyboxPcClientRunning -ErrorAction SilentlyContinue) {
-            $weStarted = [bool](Test-SkyboxPcClientRunning)
-        }
-        if ($weStarted) {
-            try { Set-SkyboxPcClientStartedMarker } catch { }
-        }
+    $weStarted = $false
+    if (Get-Command Test-SkyboxVrPcStartedByThisSession -ErrorAction SilentlyContinue) {
+        $weStarted = [bool](Test-SkyboxVrPcStartedByThisSession)
+    } elseif (Get-Command Test-SkyboxPcClientRunning -ErrorAction SilentlyContinue) {
+        $weStarted = [bool](Test-SkyboxPcClientRunning)
+    }
+    if ($weStarted) {
+        try { Set-SkyboxPcClientStartedMarker } catch { }
     }
     [void](Invoke-PlaylistSkyboxVrPcMap)
     return $ok

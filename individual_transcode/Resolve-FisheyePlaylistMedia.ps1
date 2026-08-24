@@ -167,18 +167,19 @@ function Start-FisheyeBatchQueueFollowUp {
         [Parameter(Mandatory = $true)]
         [string] $ScriptDir
     )
+    $script:FisheyeBatchFollowUpProcessStarted = $false
     $completedFull = [System.IO.Path]::GetFullPath($CompletedMediaFullPath)
     $bundle = Find-FisheyeBatchBundle -MediaFullPath $completedFull
     if ($null -eq $bundle) {
         $msg = 'No run_batch_fisheye_v360.ps1 beside 3d_playlist_local; skipping queue follow-up.'
         Write-Host $msg
-        return
+        return $false
     }
     if (-not (Test-Path -LiteralPath $bundle.MediaListFile -PathType Leaf)) {
         $msg = "media_files.txt not found ($($bundle.MediaListFile)); skipping queue follow-up."
         Write-Warning $msg
         Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message $msg
-        return
+        return $false
     }
 
     $gateScript = Join-Path $ScriptDir 'Invoke-BatchPotPlayerGate.ps1'
@@ -186,7 +187,7 @@ function Start-FisheyeBatchQueueFollowUp {
         $msg = 'Invoke-BatchPotPlayerGate.ps1 not found; skipping queue follow-up.'
         Write-Warning $msg
         Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message $msg
-        return
+        return $false
     }
     . $gateScript
 
@@ -197,7 +198,7 @@ function Start-FisheyeBatchQueueFollowUp {
         $msg = 'No eligible media in media_files.txt; skipping queue follow-up.'
         Write-Warning $msg
         Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message $msg
-        return
+        return $false
     }
     if (-not (Test-FisheyeBatchHasRemainingAfterClip -OrderedPaths $eligible -CompletedFullPath $completedFull)) {
         $msg = if ($eligible.Count -le 1) {
@@ -207,7 +208,7 @@ function Start-FisheyeBatchQueueFollowUp {
         }
         Write-Host $msg
         Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message "$msg completed=$completedFull"
-        return
+        return $false
     }
 
     $sidecarPath = "$($bundle.DplPath).transcode_queue_last"
@@ -243,9 +244,12 @@ function Start-FisheyeBatchQueueFollowUp {
         if ($null -ne $proc) {
             Write-Host "  Follow-up batch pid=$($proc.Id) (see fisheye_context_handoff.log in media root)"
             Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message "Started pid=$($proc.Id)"
+            $script:FisheyeBatchFollowUpProcessStarted = $true
+            return $true
         }
     } catch {
         Write-Warning "Fisheye batch follow-up failed: $_"
         Write-FisheyeContextHandoffLog -MediaRoot $bundle.MediaRoot -Message "FAILED: $_"
     }
+    return $false
 }

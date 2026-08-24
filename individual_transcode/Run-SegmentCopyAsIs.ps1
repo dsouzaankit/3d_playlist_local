@@ -175,7 +175,7 @@ try {
     $ssSec = [double]$ssMs / 1000.0
     $fmtSec = $ssSec.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture)
     $argList = @(
-        '-hide_banner', '-y',
+        '-hide_banner', '-y', '-nostdin',
         '-ss', $fmtSec,
         '-re',
         '-i', $fullInput,
@@ -226,8 +226,18 @@ try {
         elseif ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' }
         else { $_ }
     }) -join ' '
+    $ffmpegStdInPath = if (Get-Command Get-LeafFfmpegEmptyStdinPath -ErrorAction SilentlyContinue) {
+        Get-LeafFfmpegEmptyStdinPath
+    } else {
+        $p = Join-Path $env:TEMP '3d_playlist_local_ffmpeg_stdin.empty'
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+            [System.IO.File]::WriteAllBytes($p, [byte[]]@())
+        }
+        $p
+    }
     $proc = Start-Process -FilePath $ffmpegExe -ArgumentList $ffArgLine `
         -WorkingDirectory $root -NoNewWindow -PassThru `
+        -RedirectStandardInput $ffmpegStdInPath `
         -RedirectStandardOutput $stdOutPath -RedirectStandardError $stdErrPath
     Write-Host "As-is ffmpeg pid=$($proc.Id) stderr=$stdErrPath"
     Write-Host 'Console: Space=pause/resume leaf DLNA export; Enter=cancel (when parent allows).'

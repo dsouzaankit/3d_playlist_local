@@ -301,7 +301,7 @@ function Initialize-DlnaSegmentRootTree {
     param([Parameter(Mandatory = $true)][string] $Root)
     $rootFull = [System.IO.Path]::GetFullPath($Root)
     [void][System.IO.Directory]::CreateDirectory($rootFull)
-    foreach ($leaf in @('flat', 'fisheye', 'hybrid', 'fisheye_temp')) {
+    foreach ($leaf in @('flat', 'fisheye', 'hybrid', 'fisheye_temp', 'flat_temp_avs')) {
         [void][System.IO.Directory]::CreateDirectory((Join-Path $rootFull $leaf))
     }
     [void][System.IO.Directory]::CreateDirectory((Join-Path $rootFull 'fisheye_temp\avs'))
@@ -563,20 +563,33 @@ function Invoke-DlnaWorkflowQuitCleanup {
         }
     }
     try {
-        if (Get-Command Obfuscate-DlnaSegmentRootMedia -ErrorAction SilentlyContinue) {
+        $obfRoot = ''
+        try { $obfRoot = Get-DlnaSegmentRootAppDataFallback } catch { $obfRoot = '' }
+        if ([string]::IsNullOrWhiteSpace($obfRoot)) {
             $obf = Obfuscate-DlnaSegmentRootMedia -KeepLogs:$KeepLogs.IsPresent -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
+        } else {
+            $obf = Obfuscate-DlnaSegmentRootMedia -Root $obfRoot -KeepLogs:$KeepLogs.IsPresent -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
         }
     } catch {
         Write-Warning ("DLNA root media obfuscate on quit failed: {0}" -f $_.Exception.Message)
     }
     try {
-        if (Get-Command Remove-DlnaSegmentRootSubst -ErrorAction SilentlyContinue) {
-            $subst = Remove-DlnaSegmentRootSubst -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
-        }
+        $subst = Remove-DlnaSegmentRootSubst -Quiet:$Quiet.IsPresent -DryRun:$DryRun.IsPresent
     } catch {
-        Write-Warning ("DLNA root F: subst cleanup on quit failed: {0}" -f $_.Exception.Message)
+        Write-Warning ("DLNA root subst cleanup on quit failed: {0}" -f $_.Exception.Message)
     }
     return @{ Done = $true; Skipped = $false; Obfuscate = $obf; Subst = $subst }
+}
+
+function Invoke-ContextMenuDlnaQuitCleanup {
+    <#
+    .SYNOPSIS
+      Explorer context-menu quit: same obfuscate + dummy-drive teardown as batch/orchestrator finally.
+      Skip when this process handed off to orchestrator/batch (those own quit) or is a hidden chase worker.
+    #>
+    param([int] $ExitCode = 0)
+    $keepLogs = ($ExitCode -ne 0 -and $ExitCode -ne 124 -and $ExitCode -ne 130)
+    return (Invoke-DlnaWorkflowQuitCleanup -KeepLogs:$keepLogs)
 }
 
 function Stop-LeafFfmpegExport {
@@ -595,6 +608,34 @@ function Stop-LeafFfmpegExport {
     $script:LeafFfmpegExportSuspended = $false
     if ($null -ne $script:LeafFfmpegSuspendedPids) {
         $script:LeafFfmpegSuspendedPids.Clear()
+    }
+    return $stopped
+}
+
+function Stop-DlnaStoreFfmpegProcesses {
+    $markers = [System.Collections.Generic.List[string]]::new()
+    try { [void]$markers.Add((Get-DlnaSegmentRootAppDataFallback)) } catch { }
+    [void]$markers.Add('m1_media\3d_fullsbs_trans')
+    [void]$markers.Add('3d_playlist_local')
+    [void]$markers.Add('fisheye.frag.mp4')
+    [void]$markers.Add('3d_op_')
+    $stopped = 0
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='ffmpeg.exe'" -ErrorAction SilentlyContinue)
+    foreach ($proc in $procs) {
+        $cmd = [string]$proc.CommandLine
+        if ([string]::IsNullOrWhiteSpace($cmd)) { continue }
+        $hit = $false
+        foreach ($m in $markers) {
+            if (-not [string]::IsNullOrWhiteSpace($m) -and $cmd.IndexOf($m, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $hit = $true
+                break
+            }
+        }
+        if (-not $hit) { continue }
+        try {
+            & taskkill.exe /PID $proc.ProcessId /T /F 2>$null | Out-Null
+            $stopped++
+        } catch { }
     }
     return $stopped
 }
@@ -831,7 +872,16 @@ function Rename-DlnaPathBestEffort {
         Rename-Item -LiteralPath $Path -NewName $DestinationLeaf -Force -ErrorAction Stop
         return 'renamed'
     } catch {
-        return 'failed'
+        Start-Sleep -Milliseconds 400
+        try {
+            if (Test-Path -LiteralPath $dest -PathType Leaf) {
+                Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+            }
+            Rename-Item -LiteralPath $Path -NewName $DestinationLeaf -Force -ErrorAction Stop
+            return 'renamed'
+        } catch {
+            return 'failed'
+        }
     }
 }
 
@@ -981,12 +1031,16 @@ function Obfuscate-DlnaSegmentRootMedia {
     $rootFull = $null
     try {
         if ([string]::IsNullOrWhiteSpace($Root)) {
-            $rootFull = Ensure-DlnaSegmentRoot -SkipSkyboxClient
+            $rootFull = Get-DlnaSegmentRootAppDataFallback
         } else {
             $rootFull = [System.IO.Path]::GetFullPath($Root)
         }
     } catch {
-        $rootFull = $script:DlnaSegmentRootPreferred
+        try {
+            $rootFull = Ensure-DlnaSegmentRoot -SkipSkyboxClient
+        } catch {
+            $rootFull = $script:DlnaSegmentRootPreferred
+        }
     }
 
     $obfuscated = 0
@@ -999,6 +1053,7 @@ function Obfuscate-DlnaSegmentRootMedia {
 
     if (-not $NoStopLeafExport.IsPresent -and -not $DryRun.IsPresent) {
         try { $stopped = [int](Stop-LeafFfmpegExport) } catch { $stopped = 0 }
+        try { $stopped += [int](Stop-DlnaStoreFfmpegProcesses) } catch { }
     }
 
     if (-not (Test-Path -LiteralPath $rootFull -PathType Container)) {
@@ -1627,6 +1682,94 @@ function Toggle-LeafFfmpegExportSuspend {
     return (Suspend-LeafFfmpegExport)
 }
 
+function Get-LeafFfmpegEmptyStdinPath {
+    $path = Join-Path $env:TEMP '3d_playlist_local_ffmpeg_stdin.empty'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        [System.IO.File]::WriteAllBytes($path, [byte[]]@())
+    }
+    return $path
+}
+
+function Initialize-LeafConsoleKeyPollNative {
+    if ($script:LeafConsoleKeyPollNativeLoaded) { return $true }
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'LeafConsoleKeyPollNative').Type) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LeafConsoleKeyPollNative {
+    private const int STD_INPUT_HANDLE = -10;
+    private const ushort KEY_EVENT = 0x0001;
+    private const ushort VK_RETURN = 0x0D;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct InputRecord {
+        public ushort EventType;
+        public ushort Padding;
+        public KeyEventRecord KeyEvent;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KeyEventRecord {
+        [MarshalAs(UnmanagedType.Bool)] public bool bKeyDown;
+        public ushort wRepeatCount;
+        public ushort wVirtualKeyCode;
+        public ushort wVirtualScanCode;
+        public char UnicodeChar;
+        public uint dwControlKeyState;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNumberOfConsoleInputEvents(IntPtr h, out uint count);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool PeekConsoleInput(IntPtr h, [Out] InputRecord[] buffer, uint length, out uint read);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadConsoleInput(IntPtr h, [Out] InputRecord[] buffer, uint length, out uint read);
+    private static bool TryFindEnterKeyDown(InputRecord[] buffer, uint read, out int index) {
+        index = -1;
+        for (int i = 0; i < read; i++) {
+            if (buffer[i].EventType == KEY_EVENT && buffer[i].KeyEvent.bKeyDown && buffer[i].KeyEvent.wVirtualKeyCode == VK_RETURN) {
+                index = i;
+                return true;
+            }
+        }
+        return false;
+    }
+    public static bool TryConsumeEnterKeyPress() {
+        IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return false;
+        uint count;
+        if (!GetNumberOfConsoleInputEvents(handle, out count) || count == 0) return false;
+        InputRecord[] buffer = new InputRecord[count];
+        uint read;
+        if (!PeekConsoleInput(handle, buffer, count, out read) || read == 0) return false;
+        int enterIndex;
+        if (!TryFindEnterKeyDown(buffer, read, out enterIndex)) return false;
+        InputRecord[] consume = new InputRecord[enterIndex + 1];
+        uint consumed;
+        ReadConsoleInput(handle, consume, (uint)(enterIndex + 1), out consumed);
+        return true;
+    }
+    public static bool IsEnterKeyPending() {
+        IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return false;
+        uint count;
+        if (!GetNumberOfConsoleInputEvents(handle, out count) || count == 0) return false;
+        InputRecord[] buffer = new InputRecord[count];
+        uint read;
+        if (!PeekConsoleInput(handle, buffer, count, out read) || read == 0) return false;
+        int enterIndex;
+        return TryFindEnterKeyDown(buffer, read, out enterIndex);
+    }
+}
+'@ -ErrorAction Stop
+        }
+        $script:LeafConsoleKeyPollNativeLoaded = $true
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-TranscodeConsoleKeyPoll {
     param(
         [switch] $AllowEnterCancel,
@@ -1638,18 +1781,65 @@ function Invoke-TranscodeConsoleKeyPoll {
         if ($cancelled -and $null -ne $EnterCancel) { $EnterCancel.Value = $true }
         return [bool]$action
     }
+    if ($AllowEnterCancel -and (Initialize-LeafConsoleKeyPollNative)) {
+        try {
+            if ([LeafConsoleKeyPollNative]::TryConsumeEnterKeyPress()) {
+                if ($null -ne $EnterCancel) { $EnterCancel.Value = $true }
+                return $true
+            }
+        } catch { }
+    }
     if (-not $AllowEnterCancel -and (Get-Command Test-BatchConsoleEnterKeyPending -ErrorAction SilentlyContinue)) {
         if (Test-BatchConsoleEnterKeyPending) { return $false }
     }
+    if (-not $AllowEnterCancel -and (Initialize-LeafConsoleKeyPollNative)) {
+        try {
+            if ([LeafConsoleKeyPollNative]::IsEnterKeyPending()) { return $false }
+        } catch { }
+    }
     try {
-        if (-not [Console]::KeyAvailable) { return $false }
-        $key = [Console]::ReadKey($true)
-        if ($key.Key -eq [ConsoleKey]::Spacebar) {
-            [void](Toggle-LeafFfmpegExportSuspend)
-            return $true
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                if ($AllowEnterCancel) {
+                    if ($null -ne $EnterCancel) { $EnterCancel.Value = $true }
+                    return $true
+                }
+                return $false
+            }
+            if ($key.Key -eq [ConsoleKey]::Spacebar) {
+                [void](Toggle-LeafFfmpegExportSuspend)
+                return $true
+            }
         }
-    } catch {
-        # Non-interactive host: no console keys.
+    } catch { }
+    try {
+        if ($Host.UI.RawUI.KeyAvailable) {
+            $key = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+            if ($key.VirtualKeyCode -eq 13 -or $key.Character -eq [char]13) {
+                if ($AllowEnterCancel) {
+                    if ($null -ne $EnterCancel) { $EnterCancel.Value = $true }
+                    return $true
+                }
+                return $false
+            }
+            if ($key.VirtualKeyCode -eq 32) {
+                [void](Toggle-LeafFfmpegExportSuspend)
+                return $true
+            }
+        }
+    } catch { }
+    return $false
+}
+
+function Wait-SleepOrEnter {
+    param([int] $Seconds = 5)
+    $deadline = [datetime]::UtcNow.AddSeconds([Math]::Max(0, $Seconds))
+    while ([datetime]::UtcNow -lt $deadline) {
+        $enter = $false
+        [void](Invoke-TranscodeConsoleKeyPoll -AllowEnterCancel -EnterCancel ([ref]$enter))
+        if ($enter) { return $true }
+        Start-Sleep -Milliseconds 200
     }
     return $false
 }

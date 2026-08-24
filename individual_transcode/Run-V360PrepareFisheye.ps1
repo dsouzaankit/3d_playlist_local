@@ -95,9 +95,15 @@ $leafFfmpegControlScript = Join-Path $thisScriptDir 'Invoke-LeafFfmpegControl.ps
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
     . $leafFfmpegControlScript
 }
+$script:FisheyeAllowEnterCancel = $ContextMenu.IsPresent -and -not $ChaseWorker.IsPresent
 # Recreate dummy M:\m1_media\3d_fullsbs_trans (Skybox DLNA path) via %AppData% junction+subst.
+# Hidden pass-2 worker must not start/stop Skybox or clear the parent's started-by-workflow marker.
 if (Get-Command Ensure-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
-    [void](Ensure-DlnaSegmentRoot -Force)
+    if ($ChaseOnly.IsPresent -or $ChaseWorker.IsPresent) {
+        [void](Ensure-DlnaSegmentRoot -Force -SkipSkyboxClient)
+    } else {
+        [void](Ensure-DlnaSegmentRoot -Force)
+    }
 }
 if ((Get-Command Get-FisheyeTempRoot -ErrorAction SilentlyContinue) -and
     (Get-Command Test-DlnaPlaceholderSharePath -ErrorAction SilentlyContinue) -and
@@ -157,10 +163,18 @@ function Write-BatchPrepareFinishedMarker {
 
 function Wait-PressEnterToClose {
     param([string] $Prompt = 'Press Enter to close this window...')
+    Write-Host $Prompt
+    if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
+        while ($true) {
+            $enter = $false
+            [void](Invoke-TranscodeConsoleKeyPoll -AllowEnterCancel -EnterCancel ([ref]$enter))
+            if ($enter) { return }
+            Start-Sleep -Milliseconds 200
+        }
+    }
     try {
-        Read-Host $Prompt | Out-Null
+        Read-Host ' ' | Out-Null
     } catch {
-        # Non-interactive host: fall back to a short pause.
         Start-Sleep -Seconds 2
     }
 }
@@ -362,10 +376,26 @@ function Wait-WorkflowSleep {
     while ([DateTime]::UtcNow -lt $deadline) {
         Assert-WorkflowNotExpired 'wait'
         Assert-LauncherParentAlive 'wait'
-        if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
-            [void](Invoke-TranscodeConsoleKeyPoll)
-        }
+        Invoke-FisheyeConsoleKeyPoll
         Start-Sleep -Milliseconds 500
+    }
+}
+
+function Invoke-FisheyeConsoleKeyPoll {
+    param([int] $AlsoStopPid = 0)
+    if (-not (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue)) { return }
+    $enter = $false
+    if ($script:FisheyeAllowEnterCancel) {
+        [void](Invoke-TranscodeConsoleKeyPoll -AllowEnterCancel -EnterCancel ([ref]$enter))
+        if ($enter) {
+            Stop-FisheyeWorkflowProcesses -FisheyeTempRoot $fisheyeOutputRootFull
+            if ($AlsoStopPid -gt 0) {
+                try { & taskkill.exe /PID $AlsoStopPid /T /F 2>$null | Out-Null } catch { }
+            }
+            throw 'Fisheye cancelled by Enter'
+        }
+    } else {
+        [void](Invoke-TranscodeConsoleKeyPoll)
     }
 }
 
@@ -374,6 +404,7 @@ function Resolve-FisheyeExitCodeFromError {
     $msg = if ($null -ne $ErrorRecord) { [string]$ErrorRecord } else { '' }
     if ($msg -match 'Fisheye workflow timeout') { return $script:ExitCodeWorkflowTimeout }
     if ($msg -match 'Launcher parent closed') { return $script:ExitCodeParentClosed }
+    if ($msg -match 'cancelled by Enter') { return $script:ExitCodeParentClosed }
     return 1
 }
 
@@ -737,6 +768,7 @@ function Wait-FisheyeV360Launcher {
     while ([DateTime]::UtcNow -lt $deadline) {
         Assert-WorkflowNotExpired 'pass-1 launcher wait'
         Assert-LauncherParentAlive 'pass-1 launcher wait'
+        Invoke-FisheyeConsoleKeyPoll -AlsoStopPid $LauncherProc.Id
         if ($LauncherProc.HasExited) {
             if ($LauncherProc.ExitCode -ne 0) {
                 throw @(
@@ -751,6 +783,7 @@ function Wait-FisheyeV360Launcher {
     for ($i = 0; $i -lt 15; $i++) {
         Assert-WorkflowNotExpired 'pass-1 startup poll'
         Assert-LauncherParentAlive 'pass-1 startup poll'
+        Invoke-FisheyeConsoleKeyPoll -AlsoStopPid $LauncherProc.Id
         if (Test-FisheyeMezzanineFfmpegRunning -MezzaninePath $MezzaninePath) {
             Write-Host "Pass 1 ffmpeg confirmed for mezzanine."
             return
@@ -895,9 +928,7 @@ function Wait-FisheyeMezzanineReady {
     while ([DateTime]::UtcNow -lt $deadline) {
         Assert-WorkflowNotExpired 'mezzanine ready wait'
         Assert-LauncherParentAlive 'mezzanine ready wait'
-        if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
-            [void](Invoke-TranscodeConsoleKeyPoll)
-        }
+        Invoke-FisheyeConsoleKeyPoll
         if (Test-FisheyePass1V360Failed -MezzaninePath $Path -AllowWhileRunning) {
             Assert-FisheyePass1Healthy -MezzaninePath $Path
         }
@@ -1071,9 +1102,7 @@ function Invoke-FisheyePass2ChaseLoop {
         Assert-WorkflowNotExpired 'pass-2 chase loop'
         Assert-LauncherParentAlive 'pass-2 chase loop'
         Assert-FisheyePass1Healthy -MezzaninePath $MezzanineFullPath
-        if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
-            [void](Invoke-TranscodeConsoleKeyPoll)
-        }
+        Invoke-FisheyeConsoleKeyPoll
         $round++
         $seekSec = [double]$seekMs / 1000.0
         $pass1RunningNow = Test-FisheyeMezzanineFfmpegRunning -MezzaninePath $MezzanineFullPath
@@ -1314,9 +1343,7 @@ function Wait-FisheyePass2ChaseWorker {
     $lastHeartbeat = [DateTime]::UtcNow
     while ($true) {
         Assert-WorkflowNotExpired 'pass-2 worker wait'
-        if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
-            [void](Invoke-TranscodeConsoleKeyPoll)
-        }
+        Invoke-FisheyeConsoleKeyPoll -AlsoStopPid $WorkerProc.Id
         $exited = $true
         try {
             $WorkerProc.Refresh()
@@ -1354,6 +1381,7 @@ $batchTranscriptActive = $false
 $pass2WorkerInfo = $null
 $pass2WorkerWaited = $false
 $fisheyeBatchFollowUpMedia = ''
+$fisheyeBatchFollowUpStarted = $false
 $shouldPause = (-not $NoPause) -and $ContextMenu -and -not $ChaseOnly -and -not $DryRun
 $isChaseWorker = $ChaseOnly -and $ChaseWorker
 
@@ -1697,11 +1725,54 @@ finally {
         try { Stop-Transcript | Out-Null } catch { }
         $batchTranscriptActive = $false
     }
+    $contextMenuOwnsQuit = $ContextMenu.IsPresent -and -not $DryRun.IsPresent -and
+        -not $ChaseOnly.IsPresent -and -not $ChaseWorker.IsPresent
+    if ($contextMenuOwnsQuit) {
+        try {
+            if ($null -ne $pass2WorkerInfo -and $null -ne $pass2WorkerInfo.Process) {
+                try {
+                    $pass2WorkerInfo.Process.Refresh()
+                    if (-not $pass2WorkerInfo.Process.HasExited) {
+                        Write-Warning ("Stopping still-running pass-2 worker pid={0} before DLNA quit." -f $pass2WorkerInfo.Pid)
+                        & taskkill.exe /PID $pass2WorkerInfo.Pid /T /F 2>$null | Out-Null
+                    }
+                } catch { }
+            }
+            if (Get-Command Stop-FisheyeWorkflowProcesses -ErrorAction SilentlyContinue) {
+                Stop-FisheyeWorkflowProcesses -FisheyeTempRoot $fisheyeOutputRootFull
+            }
+            if (Get-Command Stop-DlnaStoreFfmpegProcesses -ErrorAction SilentlyContinue) {
+                [void](Stop-DlnaStoreFfmpegProcesses)
+            }
+            Start-Sleep -Milliseconds 400
+            if (-not [string]::IsNullOrWhiteSpace($fisheyeBatchFollowUpMedia) `
+                -and (Get-Command Start-FisheyeBatchQueueFollowUp -ErrorAction SilentlyContinue)) {
+                $script:FisheyeBatchFollowUpProcessStarted = $false
+                $null = Start-FisheyeBatchQueueFollowUp -CompletedMediaFullPath $fisheyeBatchFollowUpMedia -ScriptDir $thisScriptDir
+                $fisheyeBatchFollowUpStarted = [bool]$script:FisheyeBatchFollowUpProcessStarted
+                if ($fisheyeBatchFollowUpStarted) {
+                    Write-Host 'Queue follow-up batch started; that process will obfuscate DLNA on its quit.'
+                }
+            }
+            if (-not $fisheyeBatchFollowUpStarted) {
+                Write-Host 'Context-menu quit: stopping Skybox (if this run started it), obfuscating AppData store...'
+                [void](Invoke-ContextMenuDlnaQuitCleanup -ExitCode $exitCode)
+            }
+        } catch {
+            Write-Warning ("Context-menu DLNA quit cleanup failed: {0}" -f $_.Exception.Message)
+        }
+    }
     if ($shouldPause) {
         Write-Host ''
-        if ($pass2WorkerWaited -and $exitCode -eq 0) {
-            Write-Host 'Fisheye prepare complete. Closing in 8 seconds...'
-            Start-Sleep -Seconds 8
+        if ($exitCode -eq $script:ExitCodeParentClosed) {
+            Write-Host 'Stopped by Enter. Closing...'
+        } elseif ($pass2WorkerWaited -and $exitCode -eq 0) {
+            Write-Host 'Fisheye prepare complete. Press Enter to close, or wait 8 seconds...'
+            if (Get-Command Wait-SleepOrEnter -ErrorAction SilentlyContinue) {
+                [void](Wait-SleepOrEnter -Seconds 8)
+            } else {
+                Start-Sleep -Seconds 8
+            }
         } elseif ($exitCode -eq $script:ExitCodeWorkflowTimeout) {
             Wait-PressEnterToClose -Prompt 'Fisheye workflow timed out. Press Enter to close...'
         } elseif ($exitCode -ne 0) {
@@ -1716,15 +1787,6 @@ finally {
         } else {
             Wait-PressEnterToClose -Prompt 'Press Enter to close this window...'
         }
-    }
-}
-
-if (-not [string]::IsNullOrWhiteSpace($fisheyeBatchFollowUpMedia) `
-    -and (Get-Command Start-FisheyeBatchQueueFollowUp -ErrorAction SilentlyContinue)) {
-    try {
-        Start-FisheyeBatchQueueFollowUp -CompletedMediaFullPath $fisheyeBatchFollowUpMedia -ScriptDir $thisScriptDir
-    } catch {
-        Write-Warning "Fisheye batch queue follow-up failed: $_"
     }
 }
 

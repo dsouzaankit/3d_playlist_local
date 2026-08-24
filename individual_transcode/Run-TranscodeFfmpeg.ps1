@@ -142,6 +142,8 @@
   Optional Skybox token(s) inserted before .mkv in the minute-segment pattern
   (e.g. LR_180_FISHEYE -> 3d_op_%02d_LR_180_FISHEYE.mkv, Full_SBS -> 3d_op_%02d_Full_SBS.mkv).
   Empty keeps legacy 3d_op_%02d.mkv. See https://skybox.xyz/support/How-to-Adjust-2D&3D&VR-Video-Formats
+  -ContextMenu with an empty suffix defaults to Full_SBS. Non-.avs context-menu inputs are wrapped through
+  StreamTo3D.fisheye_temp.template.avs (StackHorizontal SBS) before ffmpeg.
 #>
 [CmdletBinding()]
 param(
@@ -182,6 +184,7 @@ param(
     [int] $DlnaSegmentStartNumber = 0,
 
     [string] $SegmentNameSuffix = '',
+    [switch] $AllowEnterCancel,
 
     [int] $TranscodeTimeoutSec = 0
 )
@@ -214,9 +217,26 @@ $leafFfmpegControlScript = Join-Path $thisScriptDir 'Invoke-LeafFfmpegControl.ps
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
     . $leafFfmpegControlScript
 }
+$hybridRouteScript = Join-Path $thisScriptDir 'Resolve-HybridWorkflowRoute.ps1'
+if (Test-Path -LiteralPath $hybridRouteScript -PathType Leaf) {
+    . $hybridRouteScript
+}
+$script:TranscodeAllowEnterCancel = $AllowEnterCancel.IsPresent -or $ContextMenu.IsPresent
+$script:TranscodeEnterCancelled = $false
+if ($ContextMenu.IsPresent -and [string]::IsNullOrWhiteSpace($SegmentNameSuffix)) {
+    $SegmentNameSuffix = if (Get-Command Get-DlnaSegmentNameSuffix -ErrorAction SilentlyContinue) {
+        Get-DlnaSegmentNameSuffix -Kind flat
+    } else {
+        'Full_SBS'
+    }
+}
 # Recreate dummy M:\m1_media\3d_fullsbs_trans (Skybox DLNA path) via %AppData% junction+subst.
 if (Get-Command Ensure-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
-    [void](Ensure-DlnaSegmentRoot -Force)
+    if ($SkipOrchestrator.IsPresent -or $OrchestratorPid -gt 0) {
+        [void](Ensure-DlnaSegmentRoot -Force -SkipSkyboxClient)
+    } else {
+        [void](Ensure-DlnaSegmentRoot -Force)
+    }
 }
 if (Get-Command Convert-DlnaPlaceholderSharePath -ErrorAction SilentlyContinue) {
     $OutputDirectory = Convert-DlnaPlaceholderSharePath -Path $OutputDirectory
@@ -1031,6 +1051,7 @@ $exitCode = 0
 $instanceMutex = $null
 $ownsMutex = $false
 $orchestratorFollowUp = $null
+$contextMenuHandedOffQuit = $false
 $transcriptActive = $false
 $failureLogCommandLine = $null
 $lockOwnerPath = $null
@@ -1190,6 +1211,7 @@ try {
             }
         }
     }
+    $script:TranscodeEnterCancelled = $false
 
     if ($SsMsOverride -ge 0) {
         $ssMs = [int64]$SsMsOverride
@@ -1201,6 +1223,20 @@ try {
                 $ssMs = [int64]$quickSeekOverrideMs
             }
         }
+    }
+    if ($ContextMenu.IsPresent -and
+        -not $fullInput.EndsWith('.avs', [StringComparison]::OrdinalIgnoreCase) -and
+        (Get-Command Export-FlatPassthroughAvsFromTemplate -ErrorAction SilentlyContinue)) {
+        $avsRoot = if (Get-Command Get-DlnaSegmentRoot -ErrorAction SilentlyContinue) {
+            Get-DlnaSegmentRoot
+        } else {
+            $OutputDirectory
+        }
+        $avsDir = Join-Path $avsRoot 'flat_temp_avs'
+        $safeStem = ([System.IO.Path]::GetFileNameWithoutExtension($fullInput) -replace '[\\/:*?"<>|]', '_')
+        $avsOut = Join-Path $avsDir ("StreamTo3D.flat_ctx.{0}.avs" -f $safeStem)
+        Write-Host "Context-menu Full-SBS wrap (template AVS): $avsOut"
+        $fullInput = Export-FlatPassthroughAvsFromTemplate -MediaFullPath $fullInput -AvsOutFullPath $avsOut
     }
     $root = [System.IO.Path]::GetFullPath($OutputDirectory)
     if (-not (Test-Path -LiteralPath $root)) {
@@ -1343,7 +1379,7 @@ try {
     }
 
     $argList = @(
-        '-hide_banner', '-y',
+        '-hide_banner', '-y', '-nostdin',
         '-ss', $fmtSec
     )
     if ($useReInput) {
@@ -1462,7 +1498,9 @@ try {
         elseif ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' }
         else { $_ }
     }) -join ' '
+    $ffmpegStdInPath = Get-LeafFfmpegEmptyStdinPath
     $ffProc = Start-Process -FilePath $ffmpegExe -ArgumentList $ffArgLine -NoNewWindow -PassThru `
+        -RedirectStandardInput $ffmpegStdInPath `
         -RedirectStandardOutput $ffmpegStdOutLogPath -RedirectStandardError $ffmpegStdErrLogPath
     $workflowDeadlineAtUtc = [datetime]::MaxValue
     if (Get-Command Convert-TranscodeWorkflowDeadlineUtc -ErrorAction SilentlyContinue) {
@@ -1496,7 +1534,19 @@ try {
         }
         if ($exited) { break }
         if (Get-Command Invoke-TranscodeConsoleKeyPoll -ErrorAction SilentlyContinue) {
-            [void](Invoke-TranscodeConsoleKeyPoll)
+            $enterCancel = $false
+            if ($script:TranscodeAllowEnterCancel) {
+                [void](Invoke-TranscodeConsoleKeyPoll -AllowEnterCancel -EnterCancel ([ref]$enterCancel))
+            } else {
+                [void](Invoke-TranscodeConsoleKeyPoll)
+            }
+            if ($enterCancel) {
+                Write-Warning 'Enter pressed; stopping ffmpeg process tree...'
+                Stop-ProcessTreeByPid -PidToKill $ffProc.Id
+                $script:TranscodeEnterCancelled = $true
+                $exitCode = 130
+                break
+            }
         }
         if (-not (Test-OrchestratorStillAlive -OrchProcessId $OrchestratorPid -ExpectedStartUtc $OrchestratorStartTimeUtc)) {
             $parentLost = $true
@@ -1604,6 +1654,7 @@ try {
 if ($null -ne $orchestratorFollowUp) {
     Write-Host ''
     Write-Host 'Starting orchestrator (mutex released)...'
+    $contextMenuHandedOffQuit = $true
     try {
         $sh = Get-HostPowerShellExeForOrchestrator
         $argList = @(
@@ -1643,9 +1694,23 @@ if ($exitCode -ne 0 -and $NoLogFile) {
     Write-TranscodeFailureAppendLog -ScriptDir $sd -InputPath $inp -Code $exitCode -FfmpegCommandLine $failureLogCommandLine
 }
 
-if (-not $NoPause) {
+try {
+    if ($ContextMenu.IsPresent -and -not $DryRun.IsPresent -and -not $contextMenuHandedOffQuit -and $OrchestratorPid -le 0) {
+        Write-Host 'Context-menu quit: stopping Skybox (if this run started it), obfuscating AppData store...'
+        [void](Invoke-ContextMenuDlnaQuitCleanup -ExitCode $exitCode)
+    }
+} catch {
+    Write-Warning ("Context-menu DLNA quit cleanup failed: {0}" -f $_.Exception.Message)
+}
+
+if (-not $NoPause -and -not $script:TranscodeEnterCancelled) {
     Write-Host ''
-    Write-Host 'Exiting in 5 seconds...'
-    Start-Sleep -Seconds 5
+    if ($script:TranscodeAllowEnterCancel -and (Get-Command Wait-SleepOrEnter -ErrorAction SilentlyContinue)) {
+        Write-Host 'Press Enter to close, or wait 5 seconds...'
+        [void](Wait-SleepOrEnter -Seconds 5)
+    } else {
+        Write-Host 'Exiting in 5 seconds...'
+        Start-Sleep -Seconds 5
+    }
 }
 exit $exitCode

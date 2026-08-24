@@ -328,7 +328,7 @@ Write-Host ("Fisheye v360: {0} {1}x{2} -> eye {3}; mezzanine=av1_qsv preset={4} 
 $inv = [Globalization.CultureInfo]::InvariantCulture
 $ssFmt = $SsSec.ToString('0.######', $inv)
 $argList = @(
-    '-hide_banner', '-y',
+    '-hide_banner', '-y', '-nostdin',
     '-ss', $ssFmt,
     '-fflags', '+genpts+discardcorrupt',
     '-err_detect', 'ignore_err',
@@ -377,15 +377,21 @@ if (-not (Test-Path -LiteralPath $logDir)) {
 $logStem = [System.IO.Path]::GetFileNameWithoutExtension($outFile) + '_v360'
 $logOut = Join-Path $logDir ($logStem + '.stdout.log')
 $logErr = Join-Path $logDir ($logStem + '.stderr.log')
+$stdinEmpty = Join-Path $env:TEMP '3d_playlist_local_ffmpeg_stdin.empty'
+if (-not (Test-Path -LiteralPath $stdinEmpty -PathType Leaf)) {
+    [System.IO.File]::WriteAllBytes($stdinEmpty, [byte[]]@())
+}
 
 if ($Background) {
     $p = Start-Process -FilePath $ffmpegExe -ArgumentList (Format-ProcessArgumentLine $argList) -NoNewWindow -PassThru `
+        -RedirectStandardInput $stdinEmpty `
         -RedirectStandardOutput $logOut -RedirectStandardError $logErr
     Write-Host "V360 ffmpeg started pid=$($p.Id) -> $outFile"
     Write-Host "V360 ffmpeg logs: $logErr"
     exit 0
 }
 $p = Start-Process -FilePath $ffmpegExe -ArgumentList (Format-ProcessArgumentLine $argList) -NoNewWindow -Wait -PassThru `
+    -RedirectStandardInput $stdinEmpty `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr
 Write-Host "FFmpeg exit code: $($p.ExitCode)"
 exit $p.ExitCode
