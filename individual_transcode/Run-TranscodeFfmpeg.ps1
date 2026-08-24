@@ -830,37 +830,45 @@ function Test-InvokedFromExplorerShell {
 function Find-OrchestratorPlaylistBundle {
     param(
         [string] $AvsFullPath,
-        [string] $TranscodeScriptFullPath
+        [string] $TranscodeScriptFullPath,
+        [string] $SourceMediaFullPath = '',
+        [string] $ClickedInputFullPath = ''
     )
-    $avsDir = [System.IO.Path]::GetFullPath([System.IO.Path]::GetDirectoryName($AvsFullPath))
-    $cur = $avsDir
-    for ($depth = 0; $depth -lt 12; $depth++) {
-        $orch = Join-Path $cur 'Run-TranscodeOrchestrator.ps1'
-        $pl = Join-Path $cur 'playlist.m3u'
-        if ((Test-Path -LiteralPath $orch) -and (Test-Path -LiteralPath $pl)) {
-            return @{
-                OrchestratorScript = [System.IO.Path]::GetFullPath($orch)
-                PlaylistFile       = [System.IO.Path]::GetFullPath($pl)
-                AvsFolder          = $avsDir
-            }
+    $starts = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @($SourceMediaFullPath, $ClickedInputFullPath, $AvsFullPath)) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        try {
+            $full = [System.IO.Path]::GetFullPath($p)
+        } catch {
+            continue
         }
-        $parent = [System.IO.Path]::GetDirectoryName($cur)
-        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $cur) { break }
-        $cur = $parent
+        $dir = if (Test-Path -LiteralPath $full -PathType Leaf) {
+            [System.IO.Path]::GetDirectoryName($full)
+        } else {
+            $full
+        }
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        if ($starts -notcontains $dir) { [void]$starts.Add($dir) }
     }
-    $td = [System.IO.Path]::GetDirectoryName($TranscodeScriptFullPath)
-    $repoParent = [System.IO.Path]::GetDirectoryName($td)
-    $orchRepo = Join-Path $repoParent 'Run-TranscodeOrchestrator.ps1'
-    if (Test-Path -LiteralPath $orchRepo) {
-        $plSibling = Join-Path $repoParent 'playlist.m3u'
-        $plResolved = ''
-        if (Test-Path -LiteralPath $plSibling) {
-            $plResolved = [System.IO.Path]::GetFullPath($plSibling)
-        }
-        return @{
-            OrchestratorScript = [System.IO.Path]::GetFullPath($orchRepo)
-            PlaylistFile       = $plResolved
-            AvsFolder          = $avsDir
+    foreach ($start in $starts) {
+        $cur = $start
+        for ($depth = 0; $depth -lt 16; $depth++) {
+            $orch = Join-Path $cur 'Run-TranscodeOrchestrator.ps1'
+            $pl = Join-Path $cur 'playlist.m3u'
+            if ((Test-Path -LiteralPath $orch -PathType Leaf) -and (Test-Path -LiteralPath $pl -PathType Leaf)) {
+                $avsFolder = Join-Path $cur 'avs'
+                if (-not (Test-Path -LiteralPath $avsFolder -PathType Container)) {
+                    $avsFolder = $start
+                }
+                return @{
+                    OrchestratorScript = [System.IO.Path]::GetFullPath($orch)
+                    PlaylistFile       = [System.IO.Path]::GetFullPath($pl)
+                    AvsFolder          = [System.IO.Path]::GetFullPath($avsFolder)
+                }
+            }
+            $parent = [System.IO.Path]::GetDirectoryName($cur)
+            if ([string]::IsNullOrEmpty($parent) -or $parent -eq $cur) { break }
+            $cur = $parent
         }
     }
     return $null
@@ -1243,19 +1251,15 @@ try {
         New-Item -ItemType Directory -Path $root -Force | Out-Null
     }
 
-    $ffmpegExe = $Ffmpeg
-    if (-not [System.IO.Path]::IsPathRooted($ffmpegExe)) {
-        $cmdFfmpeg = Get-Command $ffmpegExe -ErrorAction SilentlyContinue
-        if (-not $cmdFfmpeg) {
-            Write-Error "ffmpeg not found: $Ffmpeg"
-            $exitCode = 1
-            if ($NoLogFile) {
-                Write-TranscodeFailureAppendLog -ScriptDir ([System.IO.Path]::GetDirectoryName($thisScriptPath)) `
-                    -InputPath $LiteralPath -Code $exitCode -FfmpegCommandLine $null
-            }
-            return
+    $ffmpegExe = Resolve-FfmpegExecutable -Ffmpeg $Ffmpeg
+    if (-not $ffmpegExe) {
+        Write-Error "ffmpeg not found: $Ffmpeg (add ffmpeg to User or Machine PATH so Explorer-launched scripts can see it)"
+        $exitCode = 1
+        if ($NoLogFile) {
+            Write-TranscodeFailureAppendLog -ScriptDir ([System.IO.Path]::GetDirectoryName($thisScriptPath)) `
+                -InputPath $LiteralPath -Code $exitCode -FfmpegCommandLine $null
         }
-        $ffmpegExe = $cmdFfmpeg.Source
+        return
     }
 
     # Flat DLNA: always -readrate 1 (wrap-2 viewing pace). Fisheye pass-2: same. Height/bitrate logged only.
@@ -1580,6 +1584,16 @@ try {
         }
     }
     Write-Host "FFmpeg exit code: $exitCode"
+    if ($exitCode -eq 0 -and (Get-Command Copy-DlnaWrapSlotIfShortClip -ErrorAction SilentlyContinue)) {
+        $writtenSec = 0.0
+        if (-not [string]::IsNullOrWhiteSpace($ffmpegStdErrLogPath)) {
+            $writtenSec = Get-FfmpegStderrMaxOutputTimeSec -StdErrPath $ffmpegStdErrLogPath
+        }
+        $wrapStart = 0
+        if ($isFisheyeTempPass2) { $wrapStart = [Math]::Max(0, [int]$DlnaSegmentStartNumber) }
+        [void](Copy-DlnaWrapSlotIfShortClip -Directory $root -Suffix $SegmentNameSuffix `
+            -OutputDurationSec $writtenSec -StartNumber $wrapStart)
+    }
     if ($exitCode -ne 0) {
         if (-not [string]::IsNullOrWhiteSpace($ffmpegStdOutLogPath)) { Write-Host "FFmpeg stdout log: $ffmpegStdOutLogPath" }
         if (-not [string]::IsNullOrWhiteSpace($ffmpegStdErrLogPath)) { Write-Host "FFmpeg stderr log: $ffmpegStdErrLogPath" }
@@ -1615,16 +1629,23 @@ try {
     if ($exitCode -eq 0 -and -not $SkipOrchestrator -and -not $DryRun) {
         $fromCtx = ($ContextMenu -or (Test-InvokedFromExplorerShell))
         if ($fromCtx -and $fullInput.EndsWith('.avs', [StringComparison]::OrdinalIgnoreCase)) {
-            $bundle = Find-OrchestratorPlaylistBundle -AvsFullPath $fullInput -TranscodeScriptFullPath $thisScriptPath
-            if ($null -ne $bundle) {
+            $bundle = Find-OrchestratorPlaylistBundle -AvsFullPath $fullInput -TranscodeScriptFullPath $thisScriptPath `
+                -SourceMediaFullPath $sourceMedia -ClickedInputFullPath $clickedInputFull
+            if ($null -ne $bundle -and -not [string]::IsNullOrWhiteSpace($bundle['PlaylistFile'])) {
+                $resumeAfter = $fullInput
+                if (-not [string]::IsNullOrWhiteSpace($sourceMedia)) {
+                    $resumeAfter = $sourceMedia
+                } elseif (-not [string]::IsNullOrWhiteSpace($clickedInputFull)) {
+                    $resumeAfter = $clickedInputFull
+                }
                 $orchestratorFollowUp = @{
                     OrchestratorScript = $bundle['OrchestratorScript']
                     PlaylistFile       = $bundle['PlaylistFile']
                     AvsFolder          = $bundle['AvsFolder']
-                    ResumeAfter        = $fullInput
+                    ResumeAfter        = $resumeAfter
                 }
             } else {
-                Write-Warning "Run-TranscodeOrchestrator.ps1 + playlist.m3u not found (walked up from .avs folder); skipping orchestrator. Avs: $fullInput"
+                Write-Warning "Run-TranscodeOrchestrator.ps1 + playlist.m3u not found (walked up from source media / .avs); skipping orchestrator. Avs: $fullInput"
             }
         }
     }
@@ -1641,10 +1662,13 @@ try {
         $transcriptActive = $false
     }
     if ($instanceMutex) {
-        if ($ownsMutex) {
-            [void]$instanceMutex.ReleaseMutex()
-        }
-        $instanceMutex.Dispose()
+        try {
+            if ($ownsMutex) {
+                [void]$instanceMutex.ReleaseMutex()
+            }
+        } catch { }
+        try { $instanceMutex.Dispose() } catch { }
+        $instanceMutex = $null
     }
     if ($ownsMutex -and $lockOwnerPath) {
         try { Remove-Item -LiteralPath $lockOwnerPath -Force -ErrorAction SilentlyContinue } catch { }
@@ -1713,4 +1737,9 @@ if (-not $NoPause -and -not $script:TranscodeEnterCancelled) {
         Start-Sleep -Seconds 5
     }
 }
-exit $exitCode
+# powershell.exe -File can still report 1 from $LASTEXITCODE/warning stream after a successful encode.
+try {
+    [Environment]::Exit([int]$exitCode)
+} catch {
+    exit $exitCode
+}

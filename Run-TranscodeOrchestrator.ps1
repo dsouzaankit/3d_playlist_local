@@ -318,13 +318,27 @@ function Write-OrchestratorFailureSummary {
 }
 
 function Get-NormalizedChildExitCode {
-    param([object] $RawExitCode)
+    param(
+        [object] $RawExitCode,
+        [string] $StdOutPath = ''
+    )
+    $code = $null
     try {
-        if ($null -eq $RawExitCode) { return 1 }
-        return [int]$RawExitCode
-    } catch {
-        return 1
+        if ($null -ne $RawExitCode) { $code = [int]$RawExitCode }
+    } catch { }
+    if ($null -eq $code -or $code -ne 0) {
+        if (-not [string]::IsNullOrWhiteSpace($StdOutPath) -and (Test-Path -LiteralPath $StdOutPath -PathType Leaf)) {
+            try {
+                $tail = Get-Content -LiteralPath $StdOutPath -Tail 30 -ErrorAction Stop
+                $joined = ($tail -join "`n")
+                if ($joined -match '(?im)FFmpeg exit code:\s*0\b' -or $joined -match '(?im)Wrap-2 short clip') {
+                    return 0
+                }
+            } catch { }
+        }
     }
+    if ($null -eq $code) { return 1 }
+    return $code
 }
 
 function Initialize-OrchestratorFailureLog {
@@ -1044,6 +1058,8 @@ function Wait-TranscodeOrEnterWithHeartbeat {
         }
         Start-Sleep -Milliseconds 200
     }
+    try { [void]$Proc.WaitForExit(15000) } catch { }
+    try { $Proc.Refresh() } catch { }
 }
 
 function Resolve-PotPlayerExecutable {
@@ -1868,7 +1884,8 @@ while (-not $cancelled) {
         break
     }
 
-    $childExitCode = Get-NormalizedChildExitCode -RawExitCode $p.ExitCode
+    try { $p.Refresh() } catch { }
+    $childExitCode = Get-NormalizedChildExitCode -RawExitCode $p.ExitCode -StdOutPath $childLogs.StdOut
     if ($childExitCode -eq 130) {
         if (-not [string]::IsNullOrWhiteSpace($lastSuccessfulFull)) {
             Write-TranscodeProgressSidecars -SidecarPaths $progressSidecars -CompletedAvsFullPath $lastSuccessfulFull

@@ -46,9 +46,10 @@ try:
     base_path_obj = Path(__file__).parent
     media_files_path = base_path_obj.parent
     op_path = f"{base_path_obj}\\op_logs"
-    # print(f"script at: {script_path}")
+    #     print(f"script at: {script_path}")
     print(f"media_files.txt at: {media_files_path}")
     print(f"o/p folder (dummy) at: {op_path}")
+    Path(op_path).mkdir(parents=True, exist_ok=True)
     keyboard.send_keys(str(media_files_path), with_spaces=True)
     keyboard.send_keys("{ENTER}")
     main_dlg.click_input(coords=(1510, 923))

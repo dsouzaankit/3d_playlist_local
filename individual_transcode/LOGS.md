@@ -87,12 +87,13 @@ Preferred root: `M:\m1_media\3d_fullsbs_trans` (Skybox PC-client DLNA share path
 | Behavior | Detail |
 |----------|--------|
 | Per chase round | `-t 60` caps wall-clock encode; `-readrate 1` (~viewing pace). |
-| Slot alternation | Round 1,3,5… `-segment_start_number 0` (first segment → `3d_op_00.mkv`); round 2,4,6… start at `3d_op_01.mkv`. Fixes stale `3d_op_01` when rounds end before 60s at the mezzanine edge. |
+| Slot alternation | Round 1,3,5… `-segment_start_number 0` (first segment → `3d_op_00.mkv`); round 2,4,6… start at `3d_op_01.mkv`. |
+| Short mux (&lt;60s) | `Copy-DlnaWrapSlotIfShortClip`: copy the written slot onto the other (`00→01` or `01→00`). Same for flat orchestrator and hybrid as-is. Mux never opens the second file on sub-minute clips. |
 | Between rounds | Prior `3d_op_*` ffmpeg stopped; new round overwrites target slot (`-y`). |
-| Tail refresh | After chase loop, if last round progress &lt;60s: one segment-mux pass from ~last 120s of mezzanine (no `-t 60`; may refresh both slots). |
+| Tail refresh | After chase loop, if last round progress &lt;60s: one segment-mux pass from ~last 120s of mezzanine (no `-t 60`), then short-clip copy if still &lt;60s. |
 | Source type | Original media extension does not change segment rules; mezzanine is always `*.fisheye.frag.mp4`. |
 
-**Flat queue** (orchestrator child on playlist `.avs`, not `fisheye_temp`): single transcode per clip; standard segment mux only (no alternation / no chase `-t 60`).
+**Flat queue** (orchestrator child on playlist `.avs`, not `fisheye_temp`): single transcode per clip; standard segment mux (no chase `-t 60`). Sub-minute clips still copy `3d_op_00` → `3d_op_01`.
 
 **Rand fisheye batch** (`global_rand_3d_playlist\run_batch_fisheye_rand.ps1`): same pass-2 chase scripts (synced from this tree).
 

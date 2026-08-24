@@ -301,7 +301,8 @@ function Initialize-DlnaSegmentRootTree {
     param([Parameter(Mandatory = $true)][string] $Root)
     $rootFull = [System.IO.Path]::GetFullPath($Root)
     [void][System.IO.Directory]::CreateDirectory($rootFull)
-    foreach ($leaf in @('flat', 'fisheye', 'hybrid', 'fisheye_temp', 'flat_temp_avs')) {
+    # flat_temp_avs is context-menu wrap only (created on demand). Flat batch uses .\avs from StreamTo3D / hybrid.
+    foreach ($leaf in @('flat', 'fisheye', 'hybrid', 'fisheye_temp')) {
         [void][System.IO.Directory]::CreateDirectory((Join-Path $rootFull $leaf))
     }
     [void][System.IO.Directory]::CreateDirectory((Join-Path $rootFull 'fisheye_temp\avs'))
@@ -1314,6 +1315,38 @@ function Get-DlnaSegmentOutputLeaves {
     )
 }
 
+function Copy-DlnaWrapSlotIfShortClip {
+    <#
+    .SYNOPSIS
+      Wrap-2 needs 3d_op_00 and 3d_op_01. A mux shorter than 60s only writes StartNumber
+      (0 or 1). Copy that slot onto the other so both DLNA files refresh (flat and fisheye).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Directory,
+        [string] $Suffix = '',
+        [double] $OutputDurationSec = 0,
+        [int] $StartNumber = 0
+    )
+    if ($OutputDurationSec -ge 59) { return $false }
+    $leaves = @(Get-DlnaSegmentOutputLeaves -Suffix $Suffix)
+    if ($leaves.Count -lt 2) { return $false }
+    $srcIdx = if ($StartNumber -ge 1) { 1 } else { 0 }
+    $dstIdx = 1 - $srcIdx
+    $slotSrc = Join-Path $Directory $leaves[$srcIdx]
+    $slotDst = Join-Path $Directory $leaves[$dstIdx]
+    if (-not (Test-Path -LiteralPath $slotSrc -PathType Leaf)) { return $false }
+    if ($OutputDurationSec -le 0 -and (Test-Path -LiteralPath $slotDst -PathType Leaf)) { return $false }
+    try {
+        Copy-Item -LiteralPath $slotSrc -Destination $slotDst -Force
+        Write-Host ("Wrap-2 short clip ({0}s): copied {1} -> {2}" -f ([math]::Round($OutputDurationSec, 2)), $leaves[$srcIdx], $leaves[$dstIdx])
+        return $true
+    } catch {
+        Write-Warning ("Wrap-2 short clip: could not copy {0} -> {1}: {2}" -f $slotSrc, $slotDst, $_.Exception.Message)
+        return $false
+    }
+}
+
 function Clear-DlnaExportSegments {
     <#
     .SYNOPSIS
@@ -1688,6 +1721,53 @@ function Get-LeafFfmpegEmptyStdinPath {
         [System.IO.File]::WriteAllBytes($path, [byte[]]@())
     }
     return $path
+}
+
+function Sync-ProcessPathFromUserAndMachine {
+    # Explorer-launched PowerShell often has a stripped PATH (user ffmpeg missing).
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $seen = @{}
+    foreach ($scope in @('Machine', 'User')) {
+        $raw = [Environment]::GetEnvironmentVariable('Path', $scope)
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        foreach ($p in ($raw -split ';')) {
+            $t = $p.Trim()
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $key = $t.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            [void]$parts.Add($t)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:Path)) {
+        foreach ($p in ($env:Path -split ';')) {
+            $t = $p.Trim()
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $key = $t.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            [void]$parts.Add($t)
+        }
+    }
+    if ($parts.Count -gt 0) {
+        $env:Path = ($parts -join ';')
+    }
+}
+
+function Resolve-FfmpegExecutable {
+    param([string] $Ffmpeg = 'ffmpeg')
+    if ([string]::IsNullOrWhiteSpace($Ffmpeg)) { $Ffmpeg = 'ffmpeg' }
+    if ([System.IO.Path]::IsPathRooted($Ffmpeg) -and (Test-Path -LiteralPath $Ffmpeg -PathType Leaf)) {
+        return [System.IO.Path]::GetFullPath($Ffmpeg)
+    }
+    Sync-ProcessPathFromUserAndMachine
+    foreach ($name in @($Ffmpeg, 'ffmpeg.exe', 'ffmpeg')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source) -and (Test-Path -LiteralPath $cmd.Source -PathType Leaf)) {
+            return $cmd.Source
+        }
+    }
+    return $null
 }
 
 function Initialize-LeafConsoleKeyPollNative {

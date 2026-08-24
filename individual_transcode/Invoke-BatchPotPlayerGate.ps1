@@ -422,12 +422,15 @@ function Get-BatchAdjustedDplSeekMs {
 }
 
 function Get-BatchFfprobeExePath {
-    $candidates = @(
-        'C:\Program Files\StreamTo3D\tools\FFmpeg\ffmpeg-8.0.1-essentials_build\bin\ffprobe.exe',
-        'C:\Program Files\ffmpeg\bin\ffprobe.exe'
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path -LiteralPath $c) { return $c }
+    if (Get-Command Sync-ProcessPathFromUserAndMachine -ErrorAction SilentlyContinue) {
+        Sync-ProcessPathFromUserAndMachine
+    }
+    if (Get-Command Resolve-FfmpegExecutable -ErrorAction SilentlyContinue) {
+        $ffmpegExe = Resolve-FfmpegExecutable -Ffmpeg 'ffmpeg'
+        if (-not [string]::IsNullOrWhiteSpace($ffmpegExe)) {
+            $sibling = Join-Path ([System.IO.Path]::GetDirectoryName($ffmpegExe)) 'ffprobe.exe'
+            if (Test-Path -LiteralPath $sibling -PathType Leaf) { return $sibling }
+        }
     }
     $cmd = Get-Command ffprobe -ErrorAction SilentlyContinue
     if ($null -ne $cmd) { return $cmd.Source }

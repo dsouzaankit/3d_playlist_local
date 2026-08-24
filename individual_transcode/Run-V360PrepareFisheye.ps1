@@ -736,6 +736,11 @@ function Get-VideoFrameRateFraction {
 
 function Get-FfprobeExePath {
     param([string] $FfmpegExe)
+    if ([string]::IsNullOrWhiteSpace($FfmpegExe) -and (Get-Command Resolve-FfmpegExecutable -ErrorAction SilentlyContinue)) {
+        $FfmpegExe = Resolve-FfmpegExecutable -Ffmpeg 'ffmpeg'
+    } elseif (Get-Command Sync-ProcessPathFromUserAndMachine -ErrorAction SilentlyContinue) {
+        Sync-ProcessPathFromUserAndMachine
+    }
     if (-not [string]::IsNullOrWhiteSpace($FfmpegExe)) {
         $dir = [System.IO.Path]::GetDirectoryName($FfmpegExe)
         $candidate = Join-Path $dir 'ffprobe.exe'
@@ -1610,6 +1615,10 @@ try {
         '-VideoBitrateMbps', "$MezzanineVideoBitrateMbps",
         '-Background'
     )
+    if (Get-Command Resolve-FfmpegExecutable -ErrorAction SilentlyContinue) {
+        $resolvedFfmpeg = Resolve-FfmpegExecutable -Ffmpeg 'ffmpeg'
+        if ($resolvedFfmpeg) { $v360Args += @('-Ffmpeg', $resolvedFfmpeg) }
+    }
     if ($pass1SeekSec -gt 0) {
         $ssFmt = $pass1SeekSec.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture)
         $v360Args += @('-SsSec', $ssFmt)

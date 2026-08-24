@@ -151,12 +151,8 @@ try {
     }
     $outPath = Join-Path $root $HardcodedOutputFilePattern
 
-    $ffmpegExe = $Ffmpeg
-    if (-not [System.IO.Path]::IsPathRooted($ffmpegExe)) {
-        $cmdFfmpeg = Get-Command $ffmpegExe -ErrorAction SilentlyContinue
-        if (-not $cmdFfmpeg) { throw "ffmpeg not found: $Ffmpeg" }
-        $ffmpegExe = $cmdFfmpeg.Source
-    }
+    $ffmpegExe = Resolve-FfmpegExecutable -Ffmpeg $Ffmpeg
+    if (-not $ffmpegExe) { throw "ffmpeg not found: $Ffmpeg (Explorer PATH often omits user installs)" }
     $ffprobeExe = Get-AsIsFfprobeExePath -FfmpegExe $ffmpegExe
 
     if (-not $NoClampSeek -and $ffprobeExe) {
@@ -309,6 +305,8 @@ try {
         if ($readyLeaves -lt 1) {
             Write-Warning "As-is remux exit 0 but no playable DLNA segments under $root (check stderr: $stdErrPath)."
             $exitCode = 1
+        } elseif (Get-Command Copy-DlnaWrapSlotIfShortClip -ErrorAction SilentlyContinue) {
+            [void](Copy-DlnaWrapSlotIfShortClip -Directory $root -Suffix $SegmentNameSuffix -OutputDurationSec 0)
         }
     }
 }

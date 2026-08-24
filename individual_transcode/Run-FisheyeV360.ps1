@@ -38,6 +38,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$leafFfmpegControlScript = Join-Path $PSScriptRoot 'Invoke-LeafFfmpegControl.ps1'
+if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
+    . $leafFfmpegControlScript
+}
 
 function Format-ProcessArgumentLine {
     param([string[]] $Arguments)
@@ -265,12 +269,16 @@ if ($inputExt -notin $allowedInputExt) {
     throw "Input must be .avs (StreamTo3D SBS) or a video file ($(($allowedInputExt | Where-Object { $_ -ne '.avs' }) -join '/'))."
 }
 
-$ffmpegExe = $Ffmpeg
-if (-not [System.IO.Path]::IsPathRooted($ffmpegExe)) {
-    $cmd = Get-Command $ffmpegExe -ErrorAction SilentlyContinue
-    if (-not $cmd) { throw "ffmpeg not found: $Ffmpeg" }
-    $ffmpegExe = $cmd.Source
+$ffmpegExe = $null
+if (Get-Command Resolve-FfmpegExecutable -ErrorAction SilentlyContinue) {
+    $ffmpegExe = Resolve-FfmpegExecutable -Ffmpeg $Ffmpeg
+} elseif ([System.IO.Path]::IsPathRooted($Ffmpeg) -and (Test-Path -LiteralPath $Ffmpeg -PathType Leaf)) {
+    $ffmpegExe = [System.IO.Path]::GetFullPath($Ffmpeg)
+} else {
+    $cmd = Get-Command $Ffmpeg -ErrorAction SilentlyContinue
+    if ($cmd) { $ffmpegExe = $cmd.Source }
 }
+if (-not $ffmpegExe) { throw "ffmpeg not found: $Ffmpeg (Explorer PATH often omits user installs)" }
 $ffprobeExe = Get-FfprobeExePath $ffmpegExe
 
 $outDir = [System.IO.Path]::GetFullPath($OutputDirectory)
