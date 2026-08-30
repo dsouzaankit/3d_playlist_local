@@ -5,10 +5,12 @@
 
 .DESCRIPTION
   Dot-source from Invoke-LeafFfmpegControl.ps1.
-  Process start / hide-to-tray / quit and the AirScreen share (p_cld_media by default)
-  come from the Skybox_vr_pc git submodule (SkyboxVrPc.UnmapPath.ps1), then
-  P:\all_scripts\Skybox_vr_pc. This file keeps the workflow-started marker and
-  maps/unmaps 3d_fullsbs_trans. Override the Skybox_vr_pc root with SKYBOX_VR_PC_ROOT.
+  Process start / hide-to-tray / quit and the primary AirScreen share (first config
+  entry, p_cld_media by default) come from the Skybox_vr_pc git submodule
+  (SkyboxVrPc.UnmapPath.ps1), then P:\all_scripts\Skybox_vr_pc. This file keeps the
+  workflow-started marker and maps/unmaps the live dummy 3d_fullsbs_trans path.
+  It does not map L: or other extra Shares[] — only Start-SkyboxPCldMediaShare.ps1
+  uses Map -All. Override the Skybox_vr_pc root with SKYBOX_VR_PC_ROOT.
 #>
 
 $script:PlaylistSkyboxDlnaFolderName = '3d_fullsbs_trans'
@@ -121,7 +123,8 @@ function Sync-SkyboxDlnaShareMapping {
 function Start-SkyboxPcClientIfNeeded {
     <#
       Same idea as Loop Segments web companion: Skybox_vr_pc starts SKYBOX VR if idle,
-      hides to tray, waits for :8018, maps the AirScreen share, then this file maps 3d_fullsbs_trans.
+      hides to tray, waits for :8018, maps the primary AirScreen share (not Shares[] -All),
+      then this file maps 3d_fullsbs_trans.
       Quit unmaps both, then quits Skybox only if this workflow started it.
     #>
     if ($env:3D_PLAYLIST_SKIP_SKYBOX -eq '1') {
