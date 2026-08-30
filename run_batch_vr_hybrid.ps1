@@ -890,8 +890,13 @@ Write-Host "Hybrid route:    $hybridRouteScript"
 Write-Host "Fisheye prepare: $prepareScript"
 Write-Host "Flat transcode:  $flatTranscodeScript"
 Write-Host "PotPlayer DPL:   $($playlistBundle.DplPath)"
-Write-Host "Flow:            PotPlayer start clip + DPL playtime -> per-clip asis (>2K or already-3D) / flat / fisheye"
-Write-Host "Route rules:     flat if (<4Mbps non-hevc/av1) or (<2Mbps hevc/av1); else fisheye"
+Write-Host "Flow:            PotPlayer start clip + DPL playtime -> per-clip asis / flat / fisheye (hybrid_workflow.json)"
+$hybridCfg = Get-HybridWorkflowConfig -MediaRoot $mediaRoot -ForceReload
+Write-Host ("Route config:    {0}" -f $hybridCfg.Source)
+Write-Host ("  asis when:     ref px > {0}; already-3D name; suffix {1}" -f $hybridCfg.AsisAboveReferencePx, $hybridCfg.AsisSegmentSuffix)
+Write-Host ("  flat when:     <{0} kbps non-hevc/av1 or <{1} kbps hevc/av1; else fisheye" -f `
+    $hybridCfg.FlatNonHevcAv1MaxKbps, $hybridCfg.FlatHevcAv1MaxKbps)
+Write-Host ("  bitrate miss:  default {0}" -f $hybridCfg.DefaultKindWhenBitrateUnknown)
 
 $lanSegmentBitrate = Resolve-HybridLanSegmentBitrateMbps -MediaRoot $mediaRoot `
     -ExplicitMbps $SegmentVideoBitrateMbps -SkipLanBitrateCap:$SkipLanBitrateCap
@@ -1070,19 +1075,19 @@ try {
                 continue
             }
             if (Test-SkipStreamTo3DMediaName -FileName $baseName -FullPath $mediaFull) {
-                $asisSuffix = if (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue) {
-                    Get-AsIsDlnaSegmentSuffix -FileName $baseName -FullPath $mediaFull
-                } else { 'LR_180' }
+                $cfgAsis = Get-HybridWorkflowConfig -MediaRoot $mediaRoot
+                $asisSuffix = [string]$cfgAsis.AsisSegmentSuffix
+                if ([string]::IsNullOrWhiteSpace($asisSuffix)) { $asisSuffix = 'LR_180' }
                 Write-Host ("[DryRun][AsIs] suffix={0} :: already-3D stream copy -> hybrid" -f $asisSuffix)
                 Write-Host "  media: $mediaFull"
                 Write-Host ("  DLNA:  {0}\3d_op_%02d_{1}.mkv (-c copy -re)" -f $hybridSegmentOutDir, $asisSuffix)
             } else {
-                $route = Resolve-HybridWorkflowRoute -MediaFullPath $mediaFull
+                $route = Resolve-HybridWorkflowRoute -MediaFullPath $mediaFull -MediaRoot $mediaRoot
                 Write-Host ("[DryRun][Clip] route={0} suffix={1} :: {2}" -f $route.Kind, $route.Suffix, $route.Reason)
                 Write-Host "  media: $mediaFull"
                 Write-Host ("  DLNA:  {0}\3d_op_%02d_{1}.mkv" -f $hybridSegmentOutDir, $route.Suffix)
                 if ($route.Kind -eq 'asis') {
-                    Write-Host '  >2K / asis: Run-SegmentCopyAsIs (-c copy -re) -> ...\hybrid\'
+                    Write-Host ("  asis (ref > {0}): Run-SegmentCopyAsIs (-c copy -re) -> ...\hybrid\" -f $route.AsisAboveReferencePx)
                 } elseif ($route.Kind -eq 'fisheye') {
                     $avs = Join-Path $fisheyeAvsDir (Get-FisheyeTempAvsFileName -MediaFullPath $mediaFull)
                     $frag = Get-FisheyeMezzaninePath -MediaFullPath $mediaFull
@@ -1200,12 +1205,15 @@ try {
             $routeReason = ''
             if ($isAsIs3d) {
                 $routeKind = 'asis'
-                $routeSuffix = if (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue) {
-                    Get-AsIsDlnaSegmentSuffix -FileName $baseName -FullPath $mediaFull
-                } else { 'LR_180' }
+                $cfgAsis = Get-HybridWorkflowConfig -MediaRoot $mediaRoot
+                $routeSuffix = [string]$cfgAsis.AsisSegmentSuffix
+                if ([string]::IsNullOrWhiteSpace($routeSuffix) -and (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue)) {
+                    $routeSuffix = Get-AsIsDlnaSegmentSuffix -FileName $baseName -FullPath $mediaFull
+                }
+                if ([string]::IsNullOrWhiteSpace($routeSuffix)) { $routeSuffix = 'LR_180' }
                 $routeReason = 'already-3D source -> stream-copy minute segments'
             } else {
-                $route = Resolve-HybridWorkflowRoute -MediaFullPath $mediaFull
+                $route = Resolve-HybridWorkflowRoute -MediaFullPath $mediaFull -MediaRoot $mediaRoot
                 $routeKind = $route.Kind
                 $routeSuffix = $route.Suffix
                 $routeReason = $route.Reason

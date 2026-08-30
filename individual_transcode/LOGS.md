@@ -72,7 +72,7 @@ Preferred root: `M:\m1_media\3d_fullsbs_trans` (Skybox PC-client DLNA share path
 
 | Path | Notes |
 |------|--------|
-| `M:\m1_media\3d_fullsbs_trans\hybrid\3d_op_00_Full_SBS.mkv`, `3d_op_01_Full_SBS.mkv` / `*_LR_180_FISHEYE.mkv` / `*_LR_180.mkv` | Hybrid batch multiplex: flat + fisheye + **as-is** (`Run-SegmentCopyAsIs` `-c copy -re` → `LR_180` for already-3D **or** resolution ref px > 2048) share one folder; gradual handoff keeps ~two playable. |
+| `M:\m1_media\3d_fullsbs_trans\hybrid\3d_op_00_Full_SBS.mkv`, `3d_op_01_Full_SBS.mkv` / `*_LR_180_FISHEYE.mkv` / `*_LR_180.mkv` | Hybrid batch multiplex: flat + fisheye + **as-is** (`Run-SegmentCopyAsIs` `-c copy -re`; already-3D or ref px > `asisAboveReferencePx` from `hybrid_workflow.json`) share one folder. Also configurable: `flatNonHevcAv1MaxKbps`, `flatHevcAv1MaxKbps`, `defaultKindWhenBitrateUnknown`, `asisSegmentSuffix`. |
 | `M:\m1_media\3d_fullsbs_trans\fisheye\3d_op_00_LR_180_FISHEYE.mkv`, `3d_op_01_LR_180_FISHEYE.mkv` | Dedicated fisheye batch / context-menu DLNA double-buffer (~**60 seconds** per segment; trial `LR_180_FISHEYE`). |
 | `M:\m1_media\3d_fullsbs_trans\flat\3d_op_00_Full_SBS.mkv`, `3d_op_01_Full_SBS.mkv` | Dedicated flat orchestrator / context-menu DLNA double-buffer (Skybox `Full_SBS`). |
 | `M:\m1_media\3d_fullsbs_trans\fisheye_temp\avs\StreamTo3D.fisheye_temp.*.avs` | Fisheye pass-2 chase scripts. Obfuscated on quit with the rest of the DLNA root (same `<sha256>.tmp` map). `Purge-OldAvs.ps1` does **not** touch this folder unless you pass `-AvsFolder`. |

@@ -1,0 +1,8 @@
+{
+  "asisAboveReferencePx": 2048,
+  "flatNonHevcAv1MaxKbps": 4000,
+  "flatHevcAv1MaxKbps": 2000,
+  "defaultKindWhenBitrateUnknown": "fisheye",
+  "asisSegmentSuffix": "LR_180",
+  "_comment": "Hybrid routing (Resolve-HybridWorkflowRoute). asisAboveReferencePx: stream-copy when resolution ref px is GREATER THAN this (SBS uses coded width when w>=2*h, else longer edge; default 2048=2K). flat*: bitrate below threshold -> flat encode; else fisheye. defaultKindWhenBitrateUnknown: asis|flat|fisheye when probe has no bitrate. asisSegmentSuffix: Skybox token for Run-SegmentCopyAsIs (3d_op_%02d_<suffix>.mkv). Override per media folder: hybrid_workflow.json beside media_files.txt. Env: HYBRID_WORKFLOW_CONFIG=full path."
+}

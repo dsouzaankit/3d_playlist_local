@@ -4,17 +4,27 @@
   Choose flat / fisheye / asis workflow from source resolution, bitrate, and video codec.
 
 .DESCRIPTION
-  As-is (stream-copy like 3d_loop_segments) when resolution reference pixels > 2048 (">2K"):
+  As-is (stream-copy like 3d_loop_segments) when resolution reference pixels >
+  asisAboveReferencePx from hybrid_workflow.json (default 2048 = 2K):
     SBS (width >= 2*height): coded width; otherwise longer edge.
-  Else flat when:
-    - bitrate < 4 Mbps AND codec is not HEVC/H.265/AV1, OR
-    - bitrate < 2 Mbps AND codec is HEVC/H.265/AV1
-  Otherwise fisheye.
+  Else flat when bitrate below flatNonHevcAv1MaxKbps (default 4000) for non-HEVC/AV1,
+  or below flatHevcAv1MaxKbps (default 2000) for HEVC/AV1.
+  Otherwise fisheye. If bitrate cannot be probed: defaultKindWhenBitrateUnknown (default fisheye).
+  As-is Skybox token: asisSegmentSuffix (default LR_180).
 
   Bitrate prefers format=bit_rate; falls back to video stream bit_rate when format is missing.
 #>
 
-$script:HybridOver2KReferencePx = 2048
+$script:HybridAsisAboveReferencePxDefault = 2048
+$script:HybridFlatNonHevcAv1MaxKbpsDefault = 4000
+$script:HybridFlatHevcAv1MaxKbpsDefault = 2000
+$script:HybridDefaultKindWhenBitrateUnknownDefault = 'fisheye'
+$script:HybridAsisSegmentSuffixDefault = 'LR_180'
+$script:HybridWorkflowConfigCached = $null
+$script:HybridWorkflowConfigSource = ''
+# Back-compat aliases used by Get-HybridAsisAboveReferencePx
+$script:HybridAsisAboveReferencePxCached = $null
+$script:HybridAsisAboveReferencePxSource = ''
 
 function Get-HybridFfprobeExePath {
     param([string] $FfmpegExe = 'ffmpeg')
@@ -148,6 +158,219 @@ function Get-HybridResolutionReferencePixels {
     return $Height
 }
 
+function Get-HybridWorkflowConfigCandidates {
+    param(
+        [string] $MediaFullPath = '',
+        [string] $MediaRoot = '',
+        [string] $ConfigPath = ''
+    )
+    $list = [System.Collections.Generic.List[string]]::new()
+    $add = {
+        param([string] $p)
+        if ([string]::IsNullOrWhiteSpace($p)) { return }
+        try {
+            $full = [System.IO.Path]::GetFullPath($p.Trim())
+        } catch {
+            return
+        }
+        if ($list -notcontains $full) { [void]$list.Add($full) }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { & $add $ConfigPath }
+    $envCfg = [string]$env:HYBRID_WORKFLOW_CONFIG
+    if (-not [string]::IsNullOrWhiteSpace($envCfg)) { & $add $envCfg }
+    if (-not [string]::IsNullOrWhiteSpace($MediaRoot)) {
+        & $add (Join-Path $MediaRoot 'hybrid_workflow.json')
+        & $add (Join-Path $MediaRoot '3d_playlist_local\hybrid_workflow.json')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($MediaFullPath)) {
+        try {
+            $cur = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($MediaFullPath))
+            for ($i = 0; $i -lt 8 -and -not [string]::IsNullOrWhiteSpace($cur); $i++) {
+                & $add (Join-Path $cur 'hybrid_workflow.json')
+                & $add (Join-Path $cur '3d_playlist_local\hybrid_workflow.json')
+                $parent = [System.IO.Path]::GetDirectoryName($cur)
+                if ([string]::IsNullOrEmpty($parent) -or $parent -eq $cur) { break }
+                $cur = $parent
+            }
+        } catch { }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $playlistLocal = Split-Path -Parent $PSScriptRoot
+        & $add (Join-Path $playlistLocal 'hybrid_workflow.json')
+        & $add (Join-Path $PSScriptRoot 'hybrid_workflow.json')
+    }
+    & $add 'P:\all_scripts\3d_playlist_local\hybrid_workflow.json'
+    return @($list)
+}
+
+function ConvertTo-HybridPositiveInt {
+    param(
+        $Raw,
+        [hashtable] $LabelMap = $null
+    )
+    if ($null -eq $Raw) { return $null }
+    $n = 0
+    if ($Raw -is [string]) {
+        $s = ([string]$Raw).Trim()
+        if ($null -ne $LabelMap -and $LabelMap.ContainsKey($s.ToLowerInvariant())) {
+            return [int]$LabelMap[$s.ToLowerInvariant()]
+        }
+        if ($s -match '^(?i)(\d+)\s*px?$') { $s = $Matches[1] }
+        if ($s -match '^(?i)(\d+)\s*k$') {
+            return [int]$Matches[1]
+        }
+        if (-not [int]::TryParse($s, [ref]$n)) { return $null }
+    } else {
+        try { $n = [int]$Raw } catch { return $null }
+    }
+    if ($n -lt 1) { return $null }
+    return $n
+}
+
+function ConvertTo-HybridWorkflowKind {
+    param($Raw)
+    if ($null -eq $Raw) { return $null }
+    $s = ([string]$Raw).Trim().ToLowerInvariant()
+    if ($s -in @('asis', 'flat', 'fisheye')) { return $s }
+    return $null
+}
+
+function ConvertTo-HybridSegmentSuffix {
+    param($Raw)
+    if ($null -eq $Raw) { return $null }
+    $s = ([string]$Raw).Trim() -replace '[\\/:*?"<>|]', '_'
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    return $s
+}
+
+function Get-HybridWorkflowConfigDefaults {
+    return @{
+        AsisAboveReferencePx           = [int]$script:HybridAsisAboveReferencePxDefault
+        FlatNonHevcAv1MaxKbps          = [int]$script:HybridFlatNonHevcAv1MaxKbpsDefault
+        FlatHevcAv1MaxKbps             = [int]$script:HybridFlatHevcAv1MaxKbpsDefault
+        DefaultKindWhenBitrateUnknown  = [string]$script:HybridDefaultKindWhenBitrateUnknownDefault
+        AsisSegmentSuffix              = [string]$script:HybridAsisSegmentSuffixDefault
+        Source                         = 'defaults'
+    }
+}
+
+function Read-HybridWorkflowConfigFromFile {
+    param([string] $Path)
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+    try {
+        $doc = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        Write-Warning ("Could not read hybrid_workflow.json {0}: {1}" -f $Path, $_.Exception.Message)
+        return $null
+    }
+    $cfg = Get-HybridWorkflowConfigDefaults
+    $cfg.Source = $Path
+    $any = $false
+
+    $pxRaw = $null
+    foreach ($key in @('asisAboveReferencePx', 'streamCopyAboveReferencePx', 'over2KReferencePx')) {
+        if ($null -ne $doc.PSObject.Properties[$key] -and $null -ne $doc.$key) {
+            $pxRaw = $doc.$key
+            break
+        }
+    }
+    $px = ConvertTo-HybridPositiveInt -Raw $pxRaw -LabelMap @{ '2k' = 2048; '4k' = 3840 }
+    if ($null -ne $px) { $cfg.AsisAboveReferencePx = [int]$px; $any = $true }
+
+    $flatNon = $null
+    foreach ($key in @('flatNonHevcAv1MaxKbps', 'flatNonHevcAv1MaxKbpsThreshold')) {
+        if ($null -ne $doc.PSObject.Properties[$key] -and $null -ne $doc.$key) {
+            $flatNon = ConvertTo-HybridPositiveInt -Raw $doc.$key
+            break
+        }
+    }
+    if ($null -eq $flatNon -and $null -ne $doc.PSObject.Properties['flatNonHevcAv1MaxBps'] -and $null -ne $doc.flatNonHevcAv1MaxBps) {
+        $bps = ConvertTo-HybridPositiveInt -Raw $doc.flatNonHevcAv1MaxBps
+        if ($null -ne $bps) { $flatNon = [int][Math]::Max(1, [Math]::Round($bps / 1000.0)) }
+    }
+    if ($null -ne $flatNon) { $cfg.FlatNonHevcAv1MaxKbps = [int]$flatNon; $any = $true }
+
+    $flatHevc = $null
+    foreach ($key in @('flatHevcAv1MaxKbps', 'flatHevcAv1MaxKbpsThreshold')) {
+        if ($null -ne $doc.PSObject.Properties[$key] -and $null -ne $doc.$key) {
+            $flatHevc = ConvertTo-HybridPositiveInt -Raw $doc.$key
+            break
+        }
+    }
+    if ($null -eq $flatHevc -and $null -ne $doc.PSObject.Properties['flatHevcAv1MaxBps'] -and $null -ne $doc.flatHevcAv1MaxBps) {
+        $bps = ConvertTo-HybridPositiveInt -Raw $doc.flatHevcAv1MaxBps
+        if ($null -ne $bps) { $flatHevc = [int][Math]::Max(1, [Math]::Round($bps / 1000.0)) }
+    }
+    if ($null -ne $flatHevc) { $cfg.FlatHevcAv1MaxKbps = [int]$flatHevc; $any = $true }
+
+    if ($null -ne $doc.PSObject.Properties['defaultKindWhenBitrateUnknown'] -and $null -ne $doc.defaultKindWhenBitrateUnknown) {
+        $kind = ConvertTo-HybridWorkflowKind -Raw $doc.defaultKindWhenBitrateUnknown
+        if ($null -ne $kind) { $cfg.DefaultKindWhenBitrateUnknown = $kind; $any = $true }
+    }
+
+    foreach ($key in @('asisSegmentSuffix', 'asIsSegmentSuffix', 'streamCopySegmentSuffix')) {
+        if ($null -ne $doc.PSObject.Properties[$key] -and $null -ne $doc.$key) {
+            $suf = ConvertTo-HybridSegmentSuffix -Raw $doc.$key
+            if ($null -ne $suf) { $cfg.AsisSegmentSuffix = $suf; $any = $true }
+            break
+        }
+    }
+
+    if (-not $any) { return $null }
+    return $cfg
+}
+
+function Get-HybridWorkflowConfig {
+    <#
+    .SYNOPSIS
+      Load hybrid_workflow.json (routing thresholds + as-is suffix). Defaults when missing.
+    #>
+    param(
+        [string] $MediaFullPath = '',
+        [string] $MediaRoot = '',
+        [string] $ConfigPath = '',
+        [switch] $ForceReload
+    )
+    if (-not $ForceReload.IsPresent -and $null -ne $script:HybridWorkflowConfigCached) {
+        return $script:HybridWorkflowConfigCached
+    }
+    $cfg = Get-HybridWorkflowConfigDefaults
+    foreach ($cand in @(Get-HybridWorkflowConfigCandidates -MediaFullPath $MediaFullPath `
+            -MediaRoot $MediaRoot -ConfigPath $ConfigPath)) {
+        $fromFile = Read-HybridWorkflowConfigFromFile -Path $cand
+        if ($null -eq $fromFile) { continue }
+        $cfg = $fromFile
+        break
+    }
+    $script:HybridWorkflowConfigCached = $cfg
+    $script:HybridWorkflowConfigSource = [string]$cfg.Source
+    $script:HybridAsisAboveReferencePxCached = [int]$cfg.AsisAboveReferencePx
+    $script:HybridAsisAboveReferencePxSource = [string]$cfg.Source
+    return $cfg
+}
+
+function Get-HybridAsisAboveReferencePx {
+    <#
+    .SYNOPSIS
+      Threshold for as-is stream-copy: reference pixels GREATER THAN this value.
+      Default 2048 (2K). Loads hybrid_workflow.json when present.
+    #>
+    param(
+        [string] $MediaFullPath = '',
+        [string] $MediaRoot = '',
+        [string] $ConfigPath = '',
+        [switch] $ForceReload
+    )
+    $cfg = Get-HybridWorkflowConfig -MediaFullPath $MediaFullPath -MediaRoot $MediaRoot `
+        -ConfigPath $ConfigPath -ForceReload:$ForceReload
+    return @{
+        Px     = [int]$cfg.AsisAboveReferencePx
+        Source = [string]$cfg.Source
+    }
+}
+
 function Resolve-HybridWorkflowRoute {
     <#
     .SYNOPSIS
@@ -157,15 +380,50 @@ function Resolve-HybridWorkflowRoute {
         [Parameter(Mandatory = $true)]
         [string] $MediaFullPath,
         [string] $FfprobeExe = '',
-        [long] $FlatNonHevcAv1MaxBps = 4000000L,
-        [long] $FlatHevcAv1MaxBps = 2000000L,
-        [int] $Over2KReferencePx = 0
+        [long] $FlatNonHevcAv1MaxBps = 0,
+        [long] $FlatHevcAv1MaxBps = 0,
+        [int] $Over2KReferencePx = 0,
+        [string] $MediaRoot = '',
+        [string] $HybridWorkflowConfigPath = '',
+        [string] $DefaultKindWhenBitrateUnknown = '',
+        [string] $AsisSegmentSuffix = ''
     )
     $full = [System.IO.Path]::GetFullPath($MediaFullPath)
     if ([string]::IsNullOrWhiteSpace($FfprobeExe)) {
         $FfprobeExe = Get-HybridFfprobeExePath
     }
-    $over2kPx = if ($Over2KReferencePx -gt 0) { $Over2KReferencePx } else { [int]$script:HybridOver2KReferencePx }
+    $cfg = Get-HybridWorkflowConfig -MediaFullPath $full -MediaRoot $MediaRoot `
+        -ConfigPath $HybridWorkflowConfigPath
+
+    if ($Over2KReferencePx -gt 0) {
+        $over2kPx = $Over2KReferencePx
+        $thresholdSource = '-Over2KReferencePx'
+    } else {
+        $over2kPx = [int]$cfg.AsisAboveReferencePx
+        $thresholdSource = [string]$cfg.Source
+    }
+
+    $flatNonHevcMaxBps = if ($FlatNonHevcAv1MaxBps -gt 0) {
+        [long]$FlatNonHevcAv1MaxBps
+    } else {
+        [long]$cfg.FlatNonHevcAv1MaxKbps * 1000L
+    }
+    $flatHevcMaxBps = if ($FlatHevcAv1MaxBps -gt 0) {
+        [long]$FlatHevcAv1MaxBps
+    } else {
+        [long]$cfg.FlatHevcAv1MaxKbps * 1000L
+    }
+    $unknownKind = ConvertTo-HybridWorkflowKind -Raw $DefaultKindWhenBitrateUnknown
+    if ($null -eq $unknownKind) { $unknownKind = [string]$cfg.DefaultKindWhenBitrateUnknown }
+    $asisSuffix = ConvertTo-HybridSegmentSuffix -Raw $AsisSegmentSuffix
+    if ($null -eq $asisSuffix) { $asisSuffix = [string]$cfg.AsisSegmentSuffix }
+    if ([string]::IsNullOrWhiteSpace($asisSuffix)) {
+        $asisSuffix = if (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue) {
+            Get-AsIsDlnaSegmentSuffix -FullPath $full
+        } else {
+            'LR_180'
+        }
+    }
 
     $codec = $null
     $bps = $null
@@ -194,59 +452,72 @@ function Resolve-HybridWorkflowRoute {
     $codecLabel = if ([string]::IsNullOrWhiteSpace($codec)) { 'unknown' } else { $codec }
     $kbpsLabel = if ($null -eq $bps) { 'unknown' } else { [string][math]::Round([double]$bps / 1000.0) }
     $dimLabel = if ($null -ne $width -and $null -ne $height) { "${width}x${height}" } else { 'unknown' }
+    $flatNonKbps = [int][Math]::Round($flatNonHevcMaxBps / 1000.0)
+    $flatHevcKbps = [int][Math]::Round($flatHevcMaxBps / 1000.0)
 
     $kind = 'fisheye'
     $reason = ''
     $suffix = 'LR_180_FISHEYE'
 
-    # >2K (reference px): stream-copy remux like 3d_loop_segments (skip flat/fisheye encode).
+    # Above configured reference px: stream-copy remux like 3d_loop_segments (skip flat/fisheye encode).
     if ($null -ne $refPx -and $refPx -gt $over2kPx) {
         $kind = 'asis'
-        $suffix = if (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue) {
-            Get-AsIsDlnaSegmentSuffix -FullPath $full
-        } else {
-            'LR_180'
-        }
-        $reason = ("resolution {0} ref={1}px > {2} (2K) -> stream-copy like 3d_loop_segments" -f $dimLabel, $refPx, $over2kPx)
+        $suffix = $asisSuffix
+        $reason = ("resolution {0} ref={1}px > {2} ({3}) -> stream-copy like 3d_loop_segments" -f `
+            $dimLabel, $refPx, $over2kPx, $thresholdSource)
     } elseif ($null -eq $bps) {
-        $kind = 'fisheye'
-        $suffix = 'LR_180_FISHEYE'
-        $reason = "bitrate unavailable (codec=$codecLabel; $dimLabel); default fisheye"
-    } elseif ($isHevcAv1) {
-        if ($bps -lt $FlatHevcAv1MaxBps) {
-            $kind = 'flat'
+        $kind = $unknownKind
+        if ($kind -eq 'asis') {
+            $suffix = $asisSuffix
+        } elseif ($kind -eq 'flat') {
             $suffix = 'Full_SBS'
-            $reason = "hevc/av1 ~${kbpsLabel} kbps < 2000 kbps -> flat"
         } else {
             $kind = 'fisheye'
             $suffix = 'LR_180_FISHEYE'
-            $reason = "hevc/av1 ~${kbpsLabel} kbps >= 2000 kbps -> fisheye"
+        }
+        $reason = ("bitrate unavailable (codec=$codecLabel; $dimLabel); default {0} ({1})" -f $kind, $cfg.Source)
+    } elseif ($isHevcAv1) {
+        if ($bps -lt $flatHevcMaxBps) {
+            $kind = 'flat'
+            $suffix = 'Full_SBS'
+            $reason = ("hevc/av1 ~{0} kbps < {1} kbps -> flat" -f $kbpsLabel, $flatHevcKbps)
+        } else {
+            $kind = 'fisheye'
+            $suffix = 'LR_180_FISHEYE'
+            $reason = ("hevc/av1 ~{0} kbps >= {1} kbps -> fisheye" -f $kbpsLabel, $flatHevcKbps)
         }
     } else {
-        if ($bps -lt $FlatNonHevcAv1MaxBps) {
+        if ($bps -lt $flatNonHevcMaxBps) {
             $kind = 'flat'
             $suffix = 'Full_SBS'
-            $reason = "non-hevc/av1 ($codecLabel) ~${kbpsLabel} kbps < 4000 kbps -> flat"
+            $reason = ("non-hevc/av1 ($codecLabel) ~{0} kbps < {1} kbps -> flat" -f $kbpsLabel, $flatNonKbps)
         } else {
             $kind = 'fisheye'
             $suffix = 'LR_180_FISHEYE'
-            $reason = "non-hevc/av1 ($codecLabel) ~${kbpsLabel} kbps >= 4000 kbps -> fisheye"
+            $reason = ("non-hevc/av1 ($codecLabel) ~{0} kbps >= {1} kbps -> fisheye" -f $kbpsLabel, $flatNonKbps)
         }
     }
 
     return @{
-        Kind            = $kind
-        Suffix          = $suffix
-        CodecName       = $codecLabel
-        BitrateBps      = $bps
-        BitrateKbps     = if ($null -eq $bps) { $null } else { [math]::Round([double]$bps / 1000.0) }
-        BitrateSource   = $bpsSource
-        IsHevcAv1       = $isHevcAv1
-        Width           = $width
-        Height          = $height
-        ReferencePixels = $refPx
-        Reason          = $reason
-        MediaPath       = $full
+        Kind                          = $kind
+        Suffix                        = $suffix
+        CodecName                     = $codecLabel
+        BitrateBps                    = $bps
+        BitrateKbps                   = if ($null -eq $bps) { $null } else { [math]::Round([double]$bps / 1000.0) }
+        BitrateSource                 = $bpsSource
+        IsHevcAv1                     = $isHevcAv1
+        Width                         = $width
+        Height                        = $height
+        ReferencePixels               = $refPx
+        AsisAboveReferencePx          = $over2kPx
+        AsisThresholdSource           = $thresholdSource
+        FlatNonHevcAv1MaxKbps         = $flatNonKbps
+        FlatHevcAv1MaxKbps            = $flatHevcKbps
+        DefaultKindWhenBitrateUnknown = $unknownKind
+        AsisSegmentSuffix             = $asisSuffix
+        ConfigSource                  = [string]$cfg.Source
+        Reason                        = $reason
+        MediaPath                     = $full
     }
 }
 

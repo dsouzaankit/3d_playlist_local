@@ -177,12 +177,17 @@ Run sequence:
 #     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
 #     default recommend = 80% of measured LAN Mbps). -SkipLanBitrateCap ignores sidecars (falls back to ~30M).
-#   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution >2K (Resolve-HybridWorkflowRoute;
-#     SBS uses coded width when w>=2*h, else longer edge; ref px > 2048) -> Run-SegmentCopyAsIs (-c copy -re)
-#     into ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix). As-is remux ignores encode
-#     bitrate / -maxrate caps; -BatchTimeoutSec / -WorkflowDeadlineUtc still apply; -TranscodeTimeoutSec -1.
-#     Else Resolve-HybridWorkflowRoute (bitrate + codec):
-#     flat when: (<4 Mbps AND not hevc/av1) OR (<2 Mbps AND hevc/av1); otherwise fisheye
+#   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution above asisAboveReferencePx
+#     -> Run-SegmentCopyAsIs (-c copy -re) into ...\hybrid\ with asisSegmentSuffix (default LR_180).
+#     Config: hybrid_workflow.json (HYBRID_WORKFLOW_CONFIG, {media}\hybrid_workflow.json, or
+#     .\3d_playlist_local\hybrid_workflow.json from hub robocopy):
+#       asisAboveReferencePx (default 2048) — SBS coded width when w>=2*h, else longer edge; ref > threshold
+#       flatNonHevcAv1MaxKbps (default 4000) / flatHevcAv1MaxKbps (default 2000) — below -> flat, else fisheye
+#       defaultKindWhenBitrateUnknown (asis|flat|fisheye, default fisheye)
+#       asisSegmentSuffix (default LR_180)
+#     As-is remux ignores encode bitrate / -maxrate caps; -BatchTimeoutSec / -WorkflowDeadlineUtc still apply;
+#     -TranscodeTimeoutSec -1.
+#     Else Resolve-HybridWorkflowRoute (bitrate + codec using the flat* thresholds above):
 #     fisheye -> Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE
 #               -SegmentOutputDirectory M:\m1_media\3d_fullsbs_trans\hybrid
 #     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI).
