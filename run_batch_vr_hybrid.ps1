@@ -1,5 +1,5 @@
 # Hybrid batch: per clip choose flat (template AVS passthrough/SBS stack) or fisheye (prepare + chase)
-# using bitrate/codec rules from Resolve-HybridWorkflowRoute.ps1.
+# Per-clip flat vs fisheye vs as-is using resolution/bitrate/codec rules from Resolve-HybridWorkflowRoute.ps1.
 # Flat -> StreamTo3D.fisheye_temp.template.avs with source path substituted (no StreamTo3D GUI)
 # Fisheye -> prepare/chase
 # Both multiplex DLNA segments to ...\hybrid\ (Skybox Full_SBS / LR_180_FISHEYE); only latest two 3d_op_*.mkv kept.
@@ -890,7 +890,7 @@ Write-Host "Hybrid route:    $hybridRouteScript"
 Write-Host "Fisheye prepare: $prepareScript"
 Write-Host "Flat transcode:  $flatTranscodeScript"
 Write-Host "PotPlayer DPL:   $($playlistBundle.DplPath)"
-Write-Host "Flow:            PotPlayer start clip + DPL playtime -> per-clip flat or fisheye (bitrate/codec)"
+Write-Host "Flow:            PotPlayer start clip + DPL playtime -> per-clip asis (>2K or already-3D) / flat / fisheye"
 Write-Host "Route rules:     flat if (<4Mbps non-hevc/av1) or (<2Mbps hevc/av1); else fisheye"
 
 $lanSegmentBitrate = Resolve-HybridLanSegmentBitrateMbps -MediaRoot $mediaRoot `
@@ -1080,8 +1080,10 @@ try {
                 $route = Resolve-HybridWorkflowRoute -MediaFullPath $mediaFull
                 Write-Host ("[DryRun][Clip] route={0} suffix={1} :: {2}" -f $route.Kind, $route.Suffix, $route.Reason)
                 Write-Host "  media: $mediaFull"
-                Write-Host ("  DLNA:  {0}\3d_op_%02d_{1}.mkv (keep latest 2)" -f $hybridSegmentOutDir, $route.Suffix)
-                if ($route.Kind -eq 'fisheye') {
+                Write-Host ("  DLNA:  {0}\3d_op_%02d_{1}.mkv" -f $hybridSegmentOutDir, $route.Suffix)
+                if ($route.Kind -eq 'asis') {
+                    Write-Host '  >2K / asis: Run-SegmentCopyAsIs (-c copy -re) -> ...\hybrid\'
+                } elseif ($route.Kind -eq 'fisheye') {
                     $avs = Join-Path $fisheyeAvsDir (Get-FisheyeTempAvsFileName -MediaFullPath $mediaFull)
                     $frag = Get-FisheyeMezzaninePath -MediaFullPath $mediaFull
                     Write-Host '  fisheye prepare -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE -> ...\hybrid\'

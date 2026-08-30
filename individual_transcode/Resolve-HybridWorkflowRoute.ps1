@@ -1,16 +1,20 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Choose flat vs fisheye workflow from source bitrate + video codec.
+  Choose flat / fisheye / asis workflow from source resolution, bitrate, and video codec.
 
 .DESCRIPTION
-  Flat when:
+  As-is (stream-copy like 3d_loop_segments) when resolution reference pixels > 2048 (">2K"):
+    SBS (width >= 2*height): coded width; otherwise longer edge.
+  Else flat when:
     - bitrate < 4 Mbps AND codec is not HEVC/H.265/AV1, OR
     - bitrate < 2 Mbps AND codec is HEVC/H.265/AV1
   Otherwise fisheye.
 
   Bitrate prefers format=bit_rate; falls back to video stream bit_rate when format is missing.
 #>
+
+$script:HybridOver2KReferencePx = 2048
 
 function Get-HybridFfprobeExePath {
     param([string] $FfmpegExe = 'ffmpeg')
@@ -112,26 +116,70 @@ function Test-HybridHevcOrAv1Codec {
     return ($c -eq 'hevc' -or $c -eq 'h265' -or $c -eq 'hev1' -or $c -eq 'hvc1' -or $c -eq 'av1')
 }
 
+function Get-HybridVideoDimensions {
+    param(
+        [string] $MediaPath,
+        [string] $FfprobeExe
+    )
+    $raw = Invoke-HybridFfprobeOutput -FfprobeExe $FfprobeExe -ArgumentList @(
+        '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+        '-of', 'csv=p=0:s=x', '--', $MediaPath
+    )
+    $s = if ($null -eq $raw) { '' } else { ([string]$raw).Trim() }
+    if ($s -notmatch '^(\d+)x(\d+)$') { return $null }
+    $w = [int]$Matches[1]
+    $h = [int]$Matches[2]
+    if ($w -le 0 -or $h -le 0) { return $null }
+    return @{ Width = $w; Height = $h }
+}
+
+function Get-HybridResolutionReferencePixels {
+    <#
+    .SYNOPSIS
+      SBS full frame (w >= 2*h) uses coded width; else longer edge. Same idea as Loop Segments nK tier.
+    #>
+    param(
+        [int] $Width,
+        [int] $Height
+    )
+    if ($Width -le 0 -or $Height -le 0) { return 0 }
+    if ($Width -ge ($Height * 2)) { return $Width }
+    if ($Width -ge $Height) { return $Width }
+    return $Height
+}
+
 function Resolve-HybridWorkflowRoute {
     <#
     .SYNOPSIS
-      Returns workflow kind 'flat' or 'fisheye' plus probe details for logging.
+      Returns workflow kind 'asis', 'flat', or 'fisheye' plus probe details for logging.
     #>
     param(
         [Parameter(Mandatory = $true)]
         [string] $MediaFullPath,
         [string] $FfprobeExe = '',
         [long] $FlatNonHevcAv1MaxBps = 4000000L,
-        [long] $FlatHevcAv1MaxBps = 2000000L
+        [long] $FlatHevcAv1MaxBps = 2000000L,
+        [int] $Over2KReferencePx = 0
     )
     $full = [System.IO.Path]::GetFullPath($MediaFullPath)
     if ([string]::IsNullOrWhiteSpace($FfprobeExe)) {
         $FfprobeExe = Get-HybridFfprobeExePath
     }
+    $over2kPx = if ($Over2KReferencePx -gt 0) { $Over2KReferencePx } else { [int]$script:HybridOver2KReferencePx }
+
     $codec = $null
     $bps = $null
     $bpsSource = ''
+    $width = $null
+    $height = $null
+    $refPx = $null
     if (-not [string]::IsNullOrWhiteSpace($FfprobeExe)) {
+        $dims = Get-HybridVideoDimensions -MediaPath $full -FfprobeExe $FfprobeExe
+        if ($null -ne $dims) {
+            $width = [int]$dims.Width
+            $height = [int]$dims.Height
+            $refPx = Get-HybridResolutionReferencePixels -Width $width -Height $height
+        }
         $codec = Get-HybridVideoCodecName -MediaPath $full -FfprobeExe $FfprobeExe
         $bps = Get-HybridFormatBitrateBps -MediaPath $full -FfprobeExe $FfprobeExe
         if ($null -ne $bps) {
@@ -145,42 +193,60 @@ function Resolve-HybridWorkflowRoute {
     $isHevcAv1 = Test-HybridHevcOrAv1Codec -CodecName $codec
     $codecLabel = if ([string]::IsNullOrWhiteSpace($codec)) { 'unknown' } else { $codec }
     $kbpsLabel = if ($null -eq $bps) { 'unknown' } else { [string][math]::Round([double]$bps / 1000.0) }
+    $dimLabel = if ($null -ne $width -and $null -ne $height) { "${width}x${height}" } else { 'unknown' }
 
     $kind = 'fisheye'
     $reason = ''
-    if ($null -eq $bps) {
+    $suffix = 'LR_180_FISHEYE'
+
+    # >2K (reference px): stream-copy remux like 3d_loop_segments (skip flat/fisheye encode).
+    if ($null -ne $refPx -and $refPx -gt $over2kPx) {
+        $kind = 'asis'
+        $suffix = if (Get-Command Get-AsIsDlnaSegmentSuffix -ErrorAction SilentlyContinue) {
+            Get-AsIsDlnaSegmentSuffix -FullPath $full
+        } else {
+            'LR_180'
+        }
+        $reason = ("resolution {0} ref={1}px > {2} (2K) -> stream-copy like 3d_loop_segments" -f $dimLabel, $refPx, $over2kPx)
+    } elseif ($null -eq $bps) {
         $kind = 'fisheye'
-        $reason = "bitrate unavailable (codec=$codecLabel); default fisheye"
+        $suffix = 'LR_180_FISHEYE'
+        $reason = "bitrate unavailable (codec=$codecLabel; $dimLabel); default fisheye"
     } elseif ($isHevcAv1) {
         if ($bps -lt $FlatHevcAv1MaxBps) {
             $kind = 'flat'
+            $suffix = 'Full_SBS'
             $reason = "hevc/av1 ~${kbpsLabel} kbps < 2000 kbps -> flat"
         } else {
             $kind = 'fisheye'
+            $suffix = 'LR_180_FISHEYE'
             $reason = "hevc/av1 ~${kbpsLabel} kbps >= 2000 kbps -> fisheye"
         }
     } else {
         if ($bps -lt $FlatNonHevcAv1MaxBps) {
             $kind = 'flat'
+            $suffix = 'Full_SBS'
             $reason = "non-hevc/av1 ($codecLabel) ~${kbpsLabel} kbps < 4000 kbps -> flat"
         } else {
             $kind = 'fisheye'
+            $suffix = 'LR_180_FISHEYE'
             $reason = "non-hevc/av1 ($codecLabel) ~${kbpsLabel} kbps >= 4000 kbps -> fisheye"
         }
     }
 
-    # Segment suffixes: Full_SBS (flat); LR_180_FISHEYE (fisheye trial).
-    $suffix = if ($kind -eq 'flat') { 'Full_SBS' } else { 'LR_180_FISHEYE' }
     return @{
-        Kind       = $kind
-        Suffix     = $suffix
-        CodecName  = $codecLabel
-        BitrateBps = $bps
-        BitrateKbps = if ($null -eq $bps) { $null } else { [math]::Round([double]$bps / 1000.0) }
-        BitrateSource = $bpsSource
-        IsHevcAv1  = $isHevcAv1
-        Reason     = $reason
-        MediaPath  = $full
+        Kind            = $kind
+        Suffix          = $suffix
+        CodecName       = $codecLabel
+        BitrateBps      = $bps
+        BitrateKbps     = if ($null -eq $bps) { $null } else { [math]::Round([double]$bps / 1000.0) }
+        BitrateSource   = $bpsSource
+        IsHevcAv1       = $isHevcAv1
+        Width           = $width
+        Height          = $height
+        ReferencePixels = $refPx
+        Reason          = $reason
+        MediaPath       = $full
     }
 }
 

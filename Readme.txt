@@ -50,6 +50,11 @@ Run sequence:
 #     Integer CFR 24/25/30/50/60. NTSC 29.97/23.976/59.94 tagged 30/24/60 via AVS AssumeFPS
 #     (no DirectShow fps=/convertfps, no ffmpeg -vf fps= — those blend via AviSynth/QSV VPP
 #     and look soft). QSV rejects NTSC rates.
+#   DLNA minute slots are .mkv (3d_op_%02d[_Suffix].mkv), not .mp4: Matroska remuxes mixed
+#     sources with -c copy (as-is / >2K), tolerates wrap-2 overwrite while Skybox reads the
+#     sibling slot, and carries av1_qsv without MP4 brand/moov pain. Pass-1 mezzanine stays
+#     fragmented .fisheye.frag.mp4 so the file can grow while chase reads it. Prefer MP4 for
+#     phone/progressive export (ios_3d_loop_segments), not Skybox PC DLNA slots.
 #   Run start (all 3): Ensure-DlnaSegmentRoot -Force recreates empty flat/fisheye/hybrid/fisheye_temp
 #     trees and restores any <sha256>.tmp media and .avs (via .dlna_obf_map.json) from a prior quit.
 #     Also starts the Skybox PC client if it is idle (locate exe / Steam, hide to tray, wait for
@@ -162,7 +167,7 @@ Run sequence:
 #     running Purge-OldAvs.ps1 alone does a full .\avs purge
 
 # =============================================================================
-# HYBRID workflow (per-clip flat vs fisheye from bitrate + codec)
+# HYBRID workflow (per-clip asis / flat / fisheye from resolution + bitrate + codec)
 # =============================================================================
 # Recommended: .\run_batch_vr_hybrid.ps1 beside media_files.txt (setup_script_files.py deploys it with the other batch launchers)
 #   Same PotPlayer gate, live media_files.txt queue, -BatchTimeoutSec 5400, Space/Enter, resume sidecar as fisheye batch.
@@ -172,12 +177,12 @@ Run sequence:
 #     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
 #     default recommend = 80% of measured LAN Mbps). -SkipLanBitrateCap ignores sidecars (falls back to ~30M).
-#   Per clip probes format/stream bitrate + v:0 codec_name (Resolve-HybridWorkflowRoute.ps1):
-#     flat when: (<4 Mbps AND not hevc/av1) OR (<2 Mbps AND hevc/av1); otherwise fisheye
-#   Per clip: if already-3D (Test-Skip3dFormattedMediaName) -> Run-SegmentCopyAsIs (-c copy -re) into
-#     ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix). As-is remux ignores encode
+#   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution >2K (Resolve-HybridWorkflowRoute;
+#     SBS uses coded width when w>=2*h, else longer edge; ref px > 2048) -> Run-SegmentCopyAsIs (-c copy -re)
+#     into ...\hybrid\ with Skybox suffix LR_180 (Get-AsIsDlnaSegmentSuffix). As-is remux ignores encode
 #     bitrate / -maxrate caps; -BatchTimeoutSec / -WorkflowDeadlineUtc still apply; -TranscodeTimeoutSec -1.
-#     Else Resolve-HybridWorkflowRoute:
+#     Else Resolve-HybridWorkflowRoute (bitrate + codec):
+#     flat when: (<4 Mbps AND not hevc/av1) OR (<2 Mbps AND hevc/av1); otherwise fisheye
 #     fisheye -> Run-V360PrepareFisheye.ps1 -AutoChaseTranscode -ChaseSync -SegmentNameSuffix LR_180_FISHEYE
 #               -SegmentOutputDirectory M:\m1_media\3d_fullsbs_trans\hybrid
 #     flat    -> Export StreamTo3D.fisheye_temp.template.avs with source path (no StreamTo3D GUI).
