@@ -1048,8 +1048,16 @@ function Invoke-FisheyePass2TranscodePass {
     if ((Get-Command Test-WorkflowHasActiveDeadline -ErrorAction SilentlyContinue) -and (Test-WorkflowHasActiveDeadline)) {
         $chasePassParams['WorkflowDeadlineUtc'] = Format-FisheyeWorkflowDeadlineUtcIso -DeadlineUtc $script:FisheyeWorkflowDeadlineUtc
     }
-    & $TranscodeScriptPath @chasePassParams
-    return [int]$LASTEXITCODE
+    # Same-runspace call (&). Run-TranscodeFfmpeg must return [int] here — Environment.Exit would kill prepare.
+    $nestedResult = & $TranscodeScriptPath @chasePassParams
+    if ($nestedResult -is [int]) {
+        return [int]$nestedResult
+    }
+    try {
+        return [int]$LASTEXITCODE
+    } catch {
+        return 1
+    }
 }
 
 function Invoke-FisheyePass2DlnaTailRefresh {

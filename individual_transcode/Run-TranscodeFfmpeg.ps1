@@ -191,6 +191,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:ExitCodeTimeout = 124
+# & from prepare chase shares this runspace — never Environment.Exit there (kills prepare after round 1).
+$script:TranscodeNestedInProcess = ($MyInvocation.CommandOrigin -eq 'Internal') `
+    -or ($MyInvocation.InvocationName -eq '&') `
+    -or ($MyInvocation.InvocationName -eq '.')
+function Exit-RunTranscodeFfmpeg {
+    param([Parameter(Mandatory = $true)][int] $Code)
+    if ($script:TranscodeNestedInProcess) {
+        return [int]$Code
+    }
+    try {
+        [Environment]::Exit([int]$Code)
+    } catch {
+        exit $Code
+    }
+}
 if ($TranscodeTimeoutSec -gt 0) {
     $script:TranscodeTimeoutSeconds = $TranscodeTimeoutSec
 } elseif ($TranscodeTimeoutSec -lt 0) {
@@ -1105,13 +1120,13 @@ try {
             if ($remainingMs -le 0) {
                 Write-Warning "Transcode timeout reached while waiting for mutex: $InstanceMutexName"
                 $exitCode = $script:ExitCodeTimeout
-                return
+                return (Exit-RunTranscodeFfmpeg -Code $exitCode)
             }
             $acquired = $instanceMutex.WaitOne($remainingMs, $false)
             if (-not $acquired) {
                 Write-Warning "Timed out waiting for mutex after $($script:TranscodeTimeoutSeconds)s: $InstanceMutexName"
                 $exitCode = $script:ExitCodeTimeout
-                return
+                return (Exit-RunTranscodeFfmpeg -Code $exitCode)
             }
             $ownsMutex = $true
             if ($alreadyRunning) {
@@ -1195,7 +1210,7 @@ try {
             Write-TranscodeFailureAppendLog -ScriptDir ([System.IO.Path]::GetDirectoryName($thisScriptPath)) `
                 -InputPath '(no input path)' -Code $exitCode -FfmpegCommandLine $null
         }
-        return
+        return (Exit-RunTranscodeFfmpeg -Code $exitCode)
     }
 
     if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
@@ -1205,7 +1220,7 @@ try {
             Write-TranscodeFailureAppendLog -ScriptDir ([System.IO.Path]::GetDirectoryName($thisScriptPath)) `
                 -InputPath $LiteralPath -Code $exitCode -FfmpegCommandLine $null
         }
-        return
+        return (Exit-RunTranscodeFfmpeg -Code $exitCode)
     }
 
     $fullInput = [System.IO.Path]::GetFullPath($LiteralPath)
@@ -1259,7 +1274,7 @@ try {
             Write-TranscodeFailureAppendLog -ScriptDir ([System.IO.Path]::GetDirectoryName($thisScriptPath)) `
                 -InputPath $LiteralPath -Code $exitCode -FfmpegCommandLine $null
         }
-        return
+        return (Exit-RunTranscodeFfmpeg -Code $exitCode)
     }
 
     # Flat DLNA: always -readrate 1 (wrap-2 viewing pace). Fisheye pass-2: same. Height/bitrate logged only.
@@ -1483,7 +1498,7 @@ try {
     if ($DryRun) {
         Write-Host $commandLine
         $exitCode = 0
-        return
+        return (Exit-RunTranscodeFfmpeg -Code $exitCode)
     }
 
     $failureLogCommandLine = $commandLine
@@ -1737,9 +1752,6 @@ if (-not $NoPause -and -not $script:TranscodeEnterCancelled) {
         Start-Sleep -Seconds 5
     }
 }
-# powershell.exe -File can still report 1 from $LASTEXITCODE/warning stream after a successful encode.
-try {
-    [Environment]::Exit([int]$exitCode)
-} catch {
-    exit $exitCode
-}
+# Nested call (& from prepare/chase): return [int] — Environment.Exit would kill the prepare shell after round 1.
+# Entry point (powershell -File / context-menu / orchestrator child): hard-exit so the host code is reliable.
+return (Exit-RunTranscodeFfmpeg -Code $exitCode)
