@@ -63,6 +63,34 @@ def push_code_to_subdirectories(root_directory):
         else:
             log(f"No media found in directory '{dirpath}'. Skipping!")
 
+
+def deploy_web_companion_hub(hub_dir):
+    """Deploy batch launchers + 3d_playlist_local to the pCloud web-companion hub (no local media required)."""
+    os.makedirs(hub_dir, exist_ok=True)
+    dest_playlist = os.path.join(hub_dir, '3d_playlist_local')
+    try:
+        if os.path.isdir(dest_playlist):
+            shutil.rmtree(dest_playlist)
+        shutil.copytree(
+            _SCRIPT_DIR,
+            dest_playlist,
+            ignore=shutil.ignore_patterns('ai', 'ign', '.git', 'standardized', 'avs', 'op_logs', 'transcode_logs', '*.log'),
+        )
+        log(f"3d_playlist_local copied to {dest_playlist}")
+    except Exception as e:
+        log(f"Error copying 3d_playlist_local -> {dest_playlist}: {e}")
+    for init_ps_file in init_ps_files:
+        src = os.path.join(_SCRIPT_DIR, init_ps_file)
+        try:
+            if not os.path.isfile(src):
+                log(f"Error: Source file not found: {src}")
+                continue
+            shutil.copy2(src, hub_dir)
+            log(f"{init_ps_file} copied to {hub_dir}")
+        except Exception as e:
+            log(f"An error occurred copying {init_ps_file} -> {hub_dir}: {e}")
+
+
 if __name__ == '__main__':
     configure_stdio()
     log(f"Copying batch launchers from: {_SCRIPT_DIR}")
@@ -71,6 +99,9 @@ if __name__ == '__main__':
     for root_dir in root_dirs:
         # Replace 'your_root_directory_path' with the actual path you want to scan
         push_code_to_subdirectories(root_dir)
+    web_companion_hub = r'P:\p_cld_media\web_compann_plst'
+    log(f"Deploying web companion hub: {web_companion_hub}")
+    deploy_web_companion_hub(web_companion_hub)
     try:
         input('Done. Press Enter to close...')
     except EOFError:

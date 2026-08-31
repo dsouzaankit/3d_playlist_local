@@ -5,6 +5,10 @@ Run sequence:
 #                      F:\all_scripts hub is retired — do not sync or run from F:\all_scripts
 #   Deploy:            P:\all_scripts\3d_playlist_local -> each {media}\3d_playlist_local
 #                      (+ parent run_batch_*.ps1 launchers beside media_files.txt)
+#   Web companion hub: P:\p_cld_media\web_compann_plst\ (no local source media)
+#                      ios_3d_loop_segments pCloud companion Ctrl+Shift+H overwrites media_files.txt
+#                      with selected video Drive paths (absolute P:\…); run any run_batch_*.ps1 beside the list.
+#                      Deploy hub: setup_script_files.py (copies 3 launchers + 3d_playlist_local\).
 #   Other deps:        P:\all_scripts\py_venv1, P:\all_scripts\setup_venv.bat, P:\all_scripts\AutoHotkey
 #                      Skybox PC client helpers: git submodule Skybox_vr_pc (github.com/dsouzaankit/skybox-vr-pc)
 #                      After clone: git submodule update --init. Override root with SKYBOX_VR_PC_ROOT.
