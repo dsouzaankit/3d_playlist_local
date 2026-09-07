@@ -28,7 +28,9 @@ param(
     [switch] $NoBatchLog,
     [switch] $DryRun,
     [switch] $SkipMediaFolderWatcher,
-    [int] $MediaFolderWatcherPollSec = 60
+    [int] $MediaFolderWatcherPollSec = 60,
+    # After cursor reset with an empty live list: one idle wait for new media_files.txt items, then finish.
+    [int] $LiveQueueIdlePollSec = 20
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1148,7 +1150,7 @@ try {
                     $live.RawCount, $live.LiveCount, $completedThisRun.Count)
                 break
             }
-            $idlePoll = [Math]::Max(5, [int]$MediaFolderWatcherPollSec)
+            $idlePoll = [Math]::Max(5, [int]$LiveQueueIdlePollSec)
             Write-Host ("Live list empty after cursor reset (raw={0} eligible={1} completed={2}); waiting up to {3}s for new items..." -f `
                 $live.RawCount, $live.LiveCount, $completedThisRun.Count, $idlePoll)
             $enterCancel = $false

@@ -163,7 +163,7 @@ param(
     [int] $BatchTimeoutSec = 5400,
     [int] $PrepareHeartbeatSec = 0,
     [int] $PrepareHeartbeatDivisor = 5,
-    [int] $LiveQueueIdlePollSec = 60
+    [int] $LiveQueueIdlePollSec = 20
 )
 
 $ErrorActionPreference = 'Stop'

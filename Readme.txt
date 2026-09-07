@@ -152,7 +152,7 @@ Run sequence:
 #   Walks playlist.m3u; continues after current clip through the live tail (new items appended are picked up;
 #   reloads playlist + .\avs before each clip; no wrap while the tail has work). When the tail is empty,
 #   resets the cursor to the oldest live item (skips paths already completed this run); if still empty,
-#   waits one idle poll (-LiveQueueIdlePollSec) then finishes (or Enter / BatchTimeoutSec).
+#   waits one idle poll (-LiveQueueIdlePollSec, default 20s) then finishes (or Enter / BatchTimeoutSec).
 #   Each .avs -> Run-TranscodeFfmpeg.ps1 child -> 3d_op_%02d_Full_SBS.mkv
 #   av1_qsv integer CFR (24/25/30/50/60); NTSC 29.97 tagged 30 via AssumeFPS (QSV rejects 29.97).
 #   DLNA segments: -segment_time 60 -segment_wrap 2 (~60s per file, two-slot rotation; one encode per clip)
@@ -222,8 +222,9 @@ Run sequence:
 #   Does not touch flat playlist_potplayer.dpl.
 #   During the run, the batch continues after the current clip through the live media_files.txt tail
 #   (new items appended are picked up; no wrap while the tail has work). When the tail is empty, resets the
-#   cursor to the oldest live item (skips completed-this-run paths). If still empty, waits one watcher poll
-#   then finishes (or until BatchTimeoutSec / Enter).
+#   cursor to the oldest live item (skips completed-this-run paths). If still empty, waits one idle poll
+#   (-LiveQueueIdlePollSec, default 20s; separate from -MediaFolderWatcherPollSec) then finishes
+#   (or until BatchTimeoutSec / Enter).
 #   AutoHotkey companions from P:\all_scripts\AutoHotkey (or -SkipPotPlayer / -SkipCompanionBinaries).
 #   -BatchTimeoutSec 5400 entire queue; prepare children get -WorkflowDeadlineUtc (not per-clip timeout).
 #   DPL playtime (first batch clip only, 30s backoff): pass-1 mezzanine -SsSec; pass-2 from mezzanine t=0.
@@ -275,7 +276,7 @@ Run sequence:
 #   fisheye_batch.m3u/_potplayer.dpl, and playlist.m3u/playlist_potplayer.dpl (via gen_dpl.py).
 #   Auto-started by run_batch_fisheye_v360.ps1, run_batch_vr_hybrid.ps1, and run_batch_convert_streamTo3D.ps1 (one instance per media root).
 #   Fisheye/hybrid batch and flat orchestrator both continue after the current clip through the live playlist tail;
-#   on empty tail they reset the cursor to the oldest live item, then one idle poll if still empty.
+#   on empty tail they reset the cursor to the oldest live item, then one idle poll (-LiveQueueIdlePollSec, default 20s) if still empty.
 #   Manual: .\3d_playlist_local\Watch-MediaFolderPlaylists.ps1 [-Once] [-PollSeconds 60] [-Foreground]
 #   Opt out: -SkipMediaFolderWatcher on either batch script. Logs: individual_transcode\transcode_logs\media_folder_watcher\
 
