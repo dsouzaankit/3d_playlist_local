@@ -129,9 +129,12 @@ Run sequence:
 #   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
 #   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
 #   here; its End session button stops everything running: Quest players reading the output, Enter in every
-#   3d_playlist_local window (killed after ~3 min), then the Loop Segments companion
+#   3d_playlist_local window (an Enter that did not get through is retried every 5 s, up to 3 times; Enter again
+#   after 60 s; killed after ~3 min), then the Loop Segments companion
 #   (its own quit cleans up the Quest, L: and the phone) - or, without the companion, the Quest cleanup itself
-#   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way.
+#   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way. End session runs its helpers at
+#   above-normal priority (a fisheye run slowed them down to timeouts). Phone not answering at cleanup: the helper page
+#   that clears Quest Browser's Recently closed list is served from this PC (port questControlPort + 1, default 18767).
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
 #   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
 #

@@ -14,8 +14,9 @@
        (this run does that cleanup);
     1. Quest media apps (-StopMediaApps): apps connected to this PC + questPlaylistMediaPlayers,
        first, so nothing streams the segments while the workflows' quit renames them;
-    2. 3d_playlist_local workflows: Enter in every workflow window, wait for each to exit (its own
-       quit cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
+    2. 3d_playlist_local workflows: Enter in every workflow window (key helper allowed 45 s; not
+       delivered = tried again every 5 s, up to 3 times), wait for each to exit (its own quit
+       cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
     3. (nothing opens on the PC any more: a control page tab you opened there closes itself);
     4. the companion (launcher shell or its Chromium running):
        a. questPlaylistHistoryOrigins: deleted now (-ClearHistory -OnlyExtraOrigins), while the
@@ -27,7 +28,9 @@
           helper's pending file; neither (crashed, force-killed, no phone URL): step 5 runs instead;
     5. Quest step when the companion did not do it: -ClearHistory (tabs per questCloseLanTabsOnExit,
        history per questClearHistoryOnExit, sensor on, Wi-Fi off per questWifiOffOnExit), then
-       Wi-Fi off once more unless the history delete was handed to the after-quit helper;
+       Wi-Fi off once more unless the history delete was handed to the after-quit helper or the
+       cleanup's log already says it switched Wi-Fi off;
+    This run and every helper it starts run at AboveNormal priority (a fisheye run can starve them).
     6. leftovers: companion REST log sinks whose companion is gone.
 
   So the Quest history is deleted exactly once: by the companion's quit, by step 5, or by the
@@ -64,6 +67,14 @@ if (Test-Path -LiteralPath $script:PlaylistShutdownPath) {
     } catch {}
 }
 
+# Above-normal priority for this run and its helpers: a fisheye run (pass-1 + chase encode) can
+# starve them (2026-11-19: 10 s to start, 37 s to stop SKYBOX, Enter helper past its timeout).
+function Set-HelperPriority {
+    param([System.Diagnostics.Process] $Process)
+    try { if ($Process -and -not $Process.HasExited) { $Process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::AboveNormal } } catch {}
+}
+Set-HelperPriority (Get-Process -Id $PID)
+
 $script:Status = [ordered]@{ pid = $PID; state = 'running'; startedAt = (Get-Date -Format 'HH:mm:ss'); steps = [System.Collections.Generic.List[object]]::new() }
 
 function Save-ShutdownStatus {
@@ -86,6 +97,7 @@ function Invoke-ShutdownWatch {
     $statusFile = Join-Path $env:TEMP ('loopsegments-playlist-stop-{0}.txt' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
         $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments (@($Arguments) + @('-StatusFile', $statusFile))
+        Set-HelperPriority $p
         if (-not $p.WaitForExit($TimeoutSec * 1000)) {
             try { $p.Kill($true) } catch {}
             return [pscustomobject]@{ Code = -1; Status = '' }
@@ -98,9 +110,10 @@ function Invoke-ShutdownWatch {
     }
 }
 
-# Send-PlaylistLocalSpaceKey.ps1 -Key Enter; returns its JSON object.
+# Send-PlaylistLocalSpaceKey.ps1 -Key Enter; returns its JSON object. 45 s: during a fisheye run
+# its pwsh start + process list + Add-Type took over 20 s (seen 2026-11-19), so Enter was never sent.
 function Send-WorkflowEnter {
-    param([int[]] $Pids)
+    param([int[]] $Pids, [int] $TimeoutSec = 45)
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $pwsh
     foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $keyScript, '-Key', 'Enter')) { [void]$psi.ArgumentList.Add($a) }
@@ -110,9 +123,10 @@ function Send-WorkflowEnter {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $p = [System.Diagnostics.Process]::Start($psi)
+    Set-HelperPriority $p
     $out = $p.StandardOutput.ReadToEndAsync()
     $err = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit(20000)) { try { $p.Kill($true) } catch {}; return [pscustomobject]@{ ok = $false; sent = 0; consoles = @(); error = 'timed out' } }
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill($true) } catch {}; return [pscustomobject]@{ ok = $false; sent = 0; consoles = @(); error = "timed out after $TimeoutSec s" } }
     $line = ($out.Result -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
     if ($line) { try { return ($line | ConvertFrom-Json) } catch {} }
     return [pscustomobject]@{ ok = $false; sent = 0; consoles = @(); error = (($err.Result + ' ' + $out.Result).Trim()) }
@@ -214,10 +228,29 @@ if (-not $targets.Count) {
     $limit = 180
     try { if ($null -ne $cfg.questPlaylistEnterExitSec) { $limit = [int]$cfg.questPlaylistEnterExitSec } } catch {}
     $resent = $false
+    # Enter not delivered (helper timed out / failed): try again after 5 s, up to 3 times, before
+    # the usual 60 s resend - else the window just waits a minute for a key it never got.
+    $quickTries = 0
+    $lastTryAt = [DateTime]::UtcNow
     while ($true) {
         $alive = @($targets | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
         $elapsed = ([DateTime]::UtcNow - $enterAt).TotalSeconds
         if (-not $alive.Count) { Set-ShutdownStep -Name 'Workflows' -Result ('{0}: exited ({1:0} s)' -f $who, $elapsed); break }
+        if (-not $k.ok -and $quickTries -lt 3 -and ([DateTime]::UtcNow - $lastTryAt).TotalSeconds -ge 5) {
+            $quickTries++
+            $k = Send-WorkflowEnter -Pids $alive
+            $lastTryAt = [DateTime]::UtcNow
+            if ($k.ok) {
+                $who = @(@($k.consoles) | Where-Object { $_ -and $_.ok } | ForEach-Object { '{0} (pid {1})' -f $_.script, $_.pid }) -join ', '
+                Write-PlaylistQuestLog "Playlist stop: Enter sent on retry $quickTries ($who)."
+                Set-ShutdownStep -Name 'Workflows' -Result "Enter sent to $who (retry $quickTries) - waiting for exit..." -Level running
+                # The 60 s resend counts from the Enter that got through.
+                $enterAt = [DateTime]::UtcNow
+            } else {
+                Write-PlaylistQuestLog "Playlist stop: Enter retry $quickTries not sent ($($k.error))."
+            }
+            continue
+        }
         if (-not $resent -and $elapsed -ge 60) {
             $resent = $true
             [void](Send-WorkflowEnter -Pids $alive)
@@ -290,6 +323,7 @@ if ($questDoneBy) {
     Set-ShutdownStep -Name 'Quest cleanup' -Result 'already handed to the after-quit helper' -Level skip
 } else {
     Set-ShutdownStep -Name 'Quest cleanup' -Result 'tabs, history, sensor...' -Level running
+    $cleanAt = (Get-Date).AddSeconds(-1)
     $h = Invoke-ShutdownWatch -Arguments (Get-PlaylistQuestHistoryArgs) -TimeoutSec 120
     switch ($h.Code) {
         0 { Set-ShutdownStep -Name 'Quest cleanup' -Result 'tabs closed, history entries deleted, sensor back on' }
@@ -302,6 +336,9 @@ if ($questDoneBy) {
         Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'left on (questWifiOffOnExit=false)' -Level skip
     } elseif ($h.Code -eq 4 -or $h.Code -eq 1) {
         Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'left on: the after-quit helper needs it and switches it off after the history delete' -Level warn
+    } elseif (@(Get-QuestLogSince -Since $cleanAt | Where-Object { $_ -match " Wi-Fi: switched the headset's Wi-Fi off" }).Count) {
+        # The cleanup already did it; a second -WifiOff only waits ~10 s for a headset gone from adb.
+        Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'off (by the Quest cleanup)'
     } else {
         $w = Invoke-ShutdownWatch -Arguments @('-WifiOff') -TimeoutSec 60
         switch ($w.Code) {
