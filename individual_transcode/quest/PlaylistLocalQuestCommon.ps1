@@ -99,8 +99,9 @@ function Get-PlaylistQuestProcessStart {
     try { return 't' + (Get-Process -Id $ProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { return '' }
 }
 
-# Loopback sign-in token for the PC browser tab (Serve-QuestControlPage.ps1 /pc?t=<token>). Kept
-# across workflow starts so tabs opened earlier stay signed in.
+# Loopback sign-in token for a PC browser tab (Serve-QuestControlPage.ps1 /pc?t=<token>; the workflow
+# window prints that link). Kept across workflow starts so tabs opened earlier stay signed in. The
+# hook (individual_transcode\Start-PlaylistQuestSession.ps1) writes the same file the same way.
 function Get-PlaylistQuestPcToken {
     $path = Join-Path $env:TEMP 'loopsegments-quest-control-pctoken.txt'
     try { $t = (Get-Content -LiteralPath $path -Raw -ErrorAction Stop).Trim(); if ($t -match '^[A-Za-z0-9]{32,}$') { return $t } } catch {}
@@ -109,64 +110,6 @@ function Get-PlaylistQuestPcToken {
     $t = -join ($bytes | ForEach-Object { $_.ToString('x2') })
     Set-Content -LiteralPath $path -Value $t -Encoding ascii -NoNewline
     return $t
-}
-
-# ---- PC Chromium for the control page (own fresh profile, like the companion's Playwright Chromium) ----
-
-$script:PlaylistChromiumProfile = Join-Path $env:LOCALAPPDATA 'loopsegments-quest-control-chromium'
-
-# Playwright's Chromium (the companion's browser): LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS, else
-# %LOCALAPPDATA%\ms-playwright, newest chromium-<rev>. $null when not installed.
-function Find-PlaylistQuestChromium {
-    $roots = @($env:LOOP_SEGMENTS_PLAYWRIGHT_BROWSERS, (Join-Path $env:LOCALAPPDATA 'ms-playwright')) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-    foreach ($r in $roots) {
-        $exe = Get-ChildItem -LiteralPath $r -Directory -Filter 'chromium-*' -ErrorAction SilentlyContinue |
-            Sort-Object { $n = 0; [void][int]::TryParse(($_.Name -replace '^chromium-', ''), [ref]$n); $n } -Descending |
-            ForEach-Object { Join-Path $_.FullName 'chrome-win64\chrome.exe' } |
-            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if ($exe) { return $exe }
-    }
-    return $null
-}
-
-# chrome.exe processes on the control page profile (browser and its children).
-function Get-PlaylistQuestChromiumProcesses {
-    $needle = ($script:PlaylistChromiumProfile -replace '\\', '/').ToLowerInvariant()
-    return @(Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and (([string]$_.CommandLine) -replace '\\', '/').ToLowerInvariant().Contains($needle) })
-}
-
-# Open -Url in the control page Chromium: a new window on a freshly wiped profile, or a new tab
-# when it is already open (another workflow). Returns 'chromium' / 'tab' or $null (not installed).
-function Open-PlaylistQuestPcChromium {
-    param([string] $Url)
-    $exe = Find-PlaylistQuestChromium
-    if (-not $exe) { return $null }
-    $running = @(Get-PlaylistQuestChromiumProcesses).Count -gt 0
-    if (-not $running) {
-        Remove-Item -LiteralPath $script:PlaylistChromiumProfile -Recurse -Force -ErrorAction SilentlyContinue
-        [void](New-Item -ItemType Directory -Path $script:PlaylistChromiumProfile -Force)
-    }
-    $prof = $script:PlaylistChromiumProfile -replace '\\', '/'
-    # --disable-features=LaunchOnStartup: no "Begin browsing instantly: Chromium can now launch when
-    # Windows starts" infobar (chrome\browser\startup\startup_launch_manager.cc; --disable-infobars
-    # does not cover it).
-    $argLine = ('--user-data-dir="{0}" --no-first-run --no-default-browser-check --disable-infobars --disable-features=LaunchOnStartup --disable-restore-session-state ' +
-        '--disable-session-crashed-bubble --force-dark-mode --proxy-bypass-list="<local>;127.0.0.1;localhost" "{1}"') -f $prof, $Url
-    $psi = [System.Diagnostics.ProcessStartInfo]::new($exe, $argLine)
-    $psi.UseShellExecute = $true
-    [void][System.Diagnostics.Process]::Start($psi)
-    if ($running) { return 'tab' }
-    return 'chromium'
-}
-
-# Close the control page Chromium (whole browser) and delete its profile.
-function Stop-PlaylistQuestPcChromium {
-    $procs = @(Get-PlaylistQuestChromiumProcesses)
-    foreach ($p in $procs) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {} }
-    for ($i = 0; $i -lt 20 -and @(Get-PlaylistQuestChromiumProcesses).Count; $i++) { Start-Sleep -Milliseconds 250 }
-    Remove-Item -LiteralPath $script:PlaylistChromiumProfile -Recurse -Force -ErrorAction SilentlyContinue
-    return $procs.Count
 }
 
 # ---- Shared by the end-session run and the natural-end cleanup ----

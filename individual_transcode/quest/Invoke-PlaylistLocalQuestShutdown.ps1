@@ -16,7 +16,7 @@
        first, so nothing streams the segments while the workflows' quit renames them;
     2. 3d_playlist_local workflows: Enter in every workflow window, wait for each to exit (its own
        quit cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
-    3. the control page Chromium on the PC;
+    3. (nothing opens on the PC any more: a control page tab you opened there closes itself);
     4. the companion (launcher shell or its Chromium running):
        a. questPlaylistHistoryOrigins: deleted now (-ClearHistory -OnlyExtraOrigins), while the
           headset is still on Wi-Fi: the companion's quit does not know them;
@@ -236,10 +236,6 @@ if (-not $targets.Count) {
         Start-Sleep -Seconds 2
     }
 }
-
-# 3. The control page Chromium on the PC.
-$n = Stop-PlaylistQuestPcChromium
-Set-ShutdownStep -Name 'PC control page' -Result $(if ($n) { 'closed the control page Chromium' } else { 'not open' }) -Level $(if ($n) { 'ok' } else { 'skip' })
 
 # 4. Companion: its own quit does the Quest teardown (once).
 $questDoneBy = ''

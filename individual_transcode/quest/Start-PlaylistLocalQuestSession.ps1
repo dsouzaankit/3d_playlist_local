@@ -15,11 +15,14 @@
     2. keep-awake (Watch-LoopSegmentsQuestLanTab.ps1 -KeepAwakeSession -ParentPid <workflow>):
        finds the headset on adb (adb devices, questAdbHost, last address, mDNS, adb server restart)
        and holds the proximity sensor off (prox_close) once it is awake, re-applied every ~20 s;
-    3. Watch-LoopSegmentsQuestLanTab.ps1 -OpenControlPage: waits up to questPlaylistOpenWaitMinutes
-       for an awake headset and opens the control page in its own signed-in Quest Browser tab.
+    3. Watch-LoopSegmentsQuestLanTab.ps1 -OpenControlPage: waits for an awake headset (every 5 s,
+       until the workflow ends; questPlaylistOpenWaitMinutes > 0 caps it) and opens the control page
+       in its own signed-in Quest Browser tab, where it also measures PC -> Quest.
+
+  Nothing opens on the PC; the workflow window prints a sign-in link to the page instead.
 
   The workflow PID goes into %TEMP%\loopsegments-playlist-session.json, so the control page's
-  Enter button (Invoke-PlaylistLocalQuestShutdown.ps1) knows which PowerShell window to stop.
+  End session button (Invoke-PlaylistLocalQuestShutdown.ps1) knows which PowerShell window to stop.
 
   questPlaylistSession=false (windows\loop-segments-windows.json) turns it off.
   Log: %TEMP%\loopsegments-quest-lantab.log ("Playlist session:" lines).
@@ -28,9 +31,9 @@
 param(
     [Parameter(Mandatory)] [int] $WorkflowPid,
     [string] $WorkflowName = '',
-    # Internal: wait until no registered workflow runs any more, then close the control page Chromium
-    # and run the Quest cleanup (tabs, history, sensor on, Wi-Fi off per questWifiOffOnExit). The Enter
-    # button stops this helper and does all of that itself.
+    # Internal: wait until no registered workflow runs any more, then run the Quest cleanup (tabs,
+    # history, sensor on, Wi-Fi off per questWifiOffOnExit). The End session button stops this
+    # helper and does that itself.
     [switch] $CleanupWhenGone
 )
 
@@ -43,8 +46,6 @@ if ($CleanupWhenGone) {
     $cfg0 = Get-LoopSegmentsWindowsSettings
     # One helper for all workflows: done when none of them runs any more.
     while ((Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue) -or @(Get-PlaylistQuestSessions).Count) { Start-Sleep -Seconds 3 }
-    $n = Stop-PlaylistQuestPcChromium
-    if ($n) { Write-PlaylistQuestLog 'Playlist session: workflow gone - closed the control page Chromium on the PC.' }
     # A running companion does the same Quest cleanup at its own quit (and still uses the headset).
     if (@(Get-PlaylistQuestCompanionProcesses).Count) {
         Write-PlaylistQuestLog 'Playlist session: workflow gone - Quest cleanup left to the running companion.'
@@ -97,35 +98,10 @@ if ($serverPid) {
     Write-PlaylistQuestLog "Playlist session: control page server started on port $port (PID $($p.Id), stops with the workflow)."
 }
 
-# 1b. The same page in this PC's default browser, signed in through a loopback-only token link
-#     (/pc?t=<token> -> HttpOnly cookie; the Basic login never goes on a command line).
-if (-not ($cfg.Contains('questPlaylistOpenOnPc') -and $cfg.questPlaylistOpenOnPc -eq $false) -and
-    -not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $false)) {
-    $port = 18766
-    try { if ([int]$cfg.questControlPort -gt 0) { $port = [int]$cfg.questControlPort } } catch {}
-    $t0 = [DateTime]::UtcNow
-    $up = $false
-    while (-not $up -and ([DateTime]::UtcNow - $t0).TotalSeconds -lt 15) {
-        $c = [System.Net.Sockets.TcpClient]::new()
-        try { $c.Connect('127.0.0.1', $port); $up = $true } catch { Start-Sleep -Milliseconds 500 } finally { $c.Dispose() }
-    }
-    if ($up) {
-        $token = Get-PlaylistQuestPcToken
-        $pcUrl = "http://127.0.0.1:$port/pc?t=$token"
-        $how = $null
-        try { $how = Open-PlaylistQuestPcChromium -Url $pcUrl } catch { Write-PlaylistQuestLog "Playlist session: Chromium launch failed ($($_.Exception.Message))." }
-        if ($how) {
-            Write-PlaylistQuestLog ("Playlist session: control page opened on the PC in {0} (http://127.0.0.1:{1}/)." -f $(if ($how -eq 'tab') { 'the open control page Chromium (new tab)' } else { 'a fresh Chromium window' }), $port)
-        } else {
-            Start-Process $pcUrl
-            Write-PlaylistQuestLog "Playlist session: Playwright Chromium not found - control page opened in this PC's default browser (http://127.0.0.1:$port/)."
-        }
-    } else {
-        Write-PlaylistQuestLog "Playlist session: control page not listening on port $port - not opened on the PC."
-    }
-}
+# Nothing is opened on the PC: the workflow window prints a sign-in link to the page
+# (individual_transcode\Start-PlaylistQuestSession.ps1, loopback-only /pc?t=<token>).
 
-# 1c. Cleanup when the workflow ends by itself: PC Chromium, Quest tabs + history, sensor, Wi-Fi.
+# 1c. Cleanup when the workflow ends by itself: Quest tabs + history, sensor, Wi-Fi.
 if (-not @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object { ([string]$_.CommandLine) -like '*Start-PlaylistLocalQuestSession.ps1*-CleanupWhenGone*' }).Count) {
     [void](Start-PlaylistQuestHidden -Pwsh $pwsh -Script $PSCommandPath -Arguments @('-WorkflowPid', "$WorkflowPid", '-CleanupWhenGone'))
 }
@@ -143,12 +119,13 @@ if ($have.Count) {
 # 3. Push the control page to the headset browser (waits for an awake headset).
 if (-not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $false)) {
     @(Get-PlaylistQuestHelperProcesses -Pattern '*-OpenControlPage*') | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force } catch {} }
-    # The companion's Open on Quest waits 7 min (_rest_log_sink.ps1); same default here.
-    $wait = 7
+    # 0 = until the workflow ends (the helper gets -ParentPid): the headset's Wi-Fi is usually off at a
+    # workflow start, so it can take a while before it is on adb.
+    $wait = 0
     try { if ($null -ne $cfg.questPlaylistOpenWaitMinutes) { $wait = [int]$cfg.questPlaylistOpenWaitMinutes } } catch {}
     $args3 = @('-OpenControlPage', '-WaitMinutes', "$wait", '-ParentPid', "$WorkflowPid")
     if ($url) { $args3 += @('-Url', $url) }
     $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments $args3
-    Write-PlaylistQuestLog "Playlist session: opening the control page on the headset (PID $($p.Id), waits up to $wait min for it to be awake)."
+    Write-PlaylistQuestLog ("Playlist session: opening the control page on the headset (PID {0}, waits {1} for it to be awake)." -f $p.Id, $(if ($wait -gt 0) { "up to $wait min" } else { 'until the workflow ends' }))
 }
 exit 0

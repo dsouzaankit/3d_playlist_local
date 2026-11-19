@@ -126,8 +126,14 @@
   Flat / fisheye pass-2 segment encode CBR (av1_qsv). Default 0 = auto:
   LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS env, then the PC -> Quest LAN test the Quest control page
   runs at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json, 80% of measured, 5-100, under
-  12 h old; Get-QuestLanSegmentBitrate.ps1), then lan_throughput / lan_recommended_segment_bitrate.json
-  sidecars on L:\pcld_ios_media (from Measure-LoopSegmentsLanThroughput.ps1), else 30M.
+  12 h old; Get-QuestLanSegmentBitrate.ps1), then -SegmentVideoBitrateFallbackMbps (the hybrid batch's
+  own sidecar result), then lan_throughput / lan_recommended_segment_bitrate.json sidecars on
+  L:\pcld_ios_media (from Measure-LoopSegmentsLanThroughput.ps1), else 30M. Resolved on every run, so a
+  fisheye chase round (~1 min) picks up a PC -> Quest test made after the clip started.
+
+.PARAMETER SegmentVideoBitrateFallbackMbps
+  Used only when there is no explicit value, no LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS and no recent
+  PC -> Quest result (run_batch_vr_hybrid.ps1 passes its media-folder / phone sidecar result here).
 
 .PARAMETER OrchestratorPid
   Optional parent orchestrator PID. When provided (with OrchestratorStartTimeUtc), this script monitors parent liveness
@@ -175,6 +181,7 @@ param(
     [string] $FisheyeQsvPreset = 'fast',
     [double] $FisheyeSharpen = 0,
     [int] $SegmentVideoBitrateMbps = 0,
+    [int] $SegmentVideoBitrateFallbackMbps = 0,
     [int] $OrchestratorPid = 0,
     [string] $OrchestratorStartTimeUtc = '',
 
@@ -518,7 +525,7 @@ function Get-FisheyeVideoBitrateMbps {
 }
 
 function Resolve-SegmentVideoBitrateMbps {
-    param([int] $ExplicitMbps = 0)
+    param([int] $ExplicitMbps = 0, [int] $FallbackMbps = 0)
     if ($ExplicitMbps -gt 0) { return $ExplicitMbps }
 
     $envRaw = [string]$env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS
@@ -539,6 +546,11 @@ function Resolve-SegmentVideoBitrateMbps {
             Write-Host ("DLNA segment bitrate: {0}M from {1}" -f $q.Mbps, $q.Source)
             return $q.Mbps
         }
+    }
+
+    if ($FallbackMbps -gt 0) {
+        Write-Host ("DLNA segment bitrate: {0}M (batch fallback: no recent PC -> Quest test)" -f $FallbackMbps)
+        return $FallbackMbps
     }
 
     $sidecarCandidates = @(
@@ -1477,8 +1489,25 @@ try {
             '-c:a', 'copy'
         ) + $segmentMuxerOutArgs + @($outPath)
     } else {
-    $segmentMbps = Resolve-SegmentVideoBitrateMbps -ExplicitMbps $SegmentVideoBitrateMbps
+    $segmentMbps = Resolve-SegmentVideoBitrateMbps -ExplicitMbps $SegmentVideoBitrateMbps -FallbackMbps $SegmentVideoBitrateFallbackMbps
     Write-Host "DLNA segment encode: ${segmentMbps}M CBR av1_qsv (flat / fisheye pass-2 path)"
+    # Flat clips are one long ffmpeg run (fisheye pass-2 restarts every ~1 min anyway). Unless the
+    # bitrate is pinned (-SegmentVideoBitrateMbps / LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS), a new
+    # PC -> Quest result (>= 15% off) restarts it at the next segment boundary with the new bitrate:
+    # the segment list gives each finished segment's end time, the restart resumes there (-ss) with
+    # the next wrap slot (-segment_start_number), so playback continues without a gap.
+    $flatAdaptive = (-not $isFisheyeTempPass2) -and ($SegmentVideoBitrateMbps -le 0) -and
+        -not ([string]$env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS -match '^\s*\d+\s*$' -and [int]$env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS -gt 0)
+    $flatSegList = ''
+    if ($flatAdaptive) {
+        $questHelperFlat = Join-Path $PSScriptRoot 'Get-QuestLanSegmentBitrate.ps1'
+        if (Test-Path -LiteralPath $questHelperFlat -PathType Leaf) { . $questHelperFlat } else { $flatAdaptive = $false }
+    }
+    if ($flatAdaptive) {
+        $flatSegList = Join-Path $env:TEMP ('loopsegments-flat-seglist-{0}.csv' -f [guid]::NewGuid().ToString('N').Substring(0, 10))
+        $segmentMuxerOutArgs = @($segmentMuxerOutArgs) + @('-segment_list', $flatSegList, '-segment_list_type', 'csv')
+        Write-Host 'DLNA segment bitrate follows the PC -> Quest test: a new result (>= 15% off) restarts the export at the next segment boundary.'
+    }
     $segmentAudioArgs = if ($isFisheyeTempPass2) {
         @('-c:a', 'aac', '-b:a', '192k', '-ar', '48000')
     } else {
@@ -1541,6 +1570,12 @@ try {
             $workflowDeadlineAtUtc = $parsedDeadline
         }
     }
+    $flatLastCheck = [DateTime]::UtcNow
+    $flatPendingMbps = 0
+    $flatPendingRows = 0
+    $flatRestarts = 0
+    $flatEarlierSec = 0.0
+    if (-not (Get-Variable -Name flatAdaptive -Scope 0 -ErrorAction SilentlyContinue)) { $flatAdaptive = $false; $flatSegList = '' }
     while ($true) {
         if ([DateTime]::UtcNow -ge $transcodeTimeoutAtUtc) {
             Write-Warning "Transcode timeout reached ($($script:TranscodeTimeoutSeconds)s). Stopping ffmpeg process tree..."
@@ -1586,8 +1621,70 @@ try {
             Stop-ProcessTreeByPid -PidToKill $ffProc.Id
             break
         }
+        if ($flatAdaptive) {
+            if (([DateTime]::UtcNow - $flatLastCheck).TotalSeconds -ge 5) {
+                $flatLastCheck = [DateTime]::UtcNow
+                $qNow = Get-QuestLanSegmentBitrateMbps
+                if ($qNow -and $segmentMbps -gt 0 -and [Math]::Abs([int]$qNow.Mbps - $segmentMbps) / [double]$segmentMbps -ge 0.15 -and [int]$qNow.Mbps -ne $flatPendingMbps) {
+                    $flatPendingMbps = [int]$qNow.Mbps
+                    $flatPendingRows = @(Get-Content -LiteralPath $flatSegList -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }).Count
+                    Write-Host ("[bitrate] PC -> Quest test changed {0}M -> {1}M: restarting the export at the next segment boundary..." -f $segmentMbps, $flatPendingMbps)
+                }
+            }
+            if ($flatPendingMbps -gt 0) {
+                $rows = @(Get-Content -LiteralPath $flatSegList -ErrorAction SilentlyContinue | Where-Object { $_.Trim() })
+                if ($rows.Count -gt $flatPendingRows) {
+                    # A segment just finished: resume exactly at its end, in the other wrap slot.
+                    $cols = @($rows[$rows.Count - 1] -split ',')
+                    $endSec = 0.0
+                    [void][double]::TryParse([string]$cols[$cols.Count - 1], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$endSec)
+                    $lastIdx = if ([string]$cols[0] -match '3d_op_(\d+)') { [int]$Matches[1] } else { -1 }
+                    Stop-ProcessTreeByPid -PidToKill $ffProc.Id
+                    try { [void]$ffProc.WaitForExit(10000) } catch {}
+                    if ($endSec -gt 0 -and $lastIdx -ge 0) {
+                        $flatEarlierSec += $endSec
+                        $ssSec += $endSec
+                        $fmtSec = $ssSec.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture)
+                        $nextIdx = ($lastIdx + 1) % 2
+                        $segmentMbps = $flatPendingMbps
+                        $flatSegList = Join-Path $env:TEMP ('loopsegments-flat-seglist-{0}.csv' -f [guid]::NewGuid().ToString('N').Substring(0, 10))
+                        $newArgs = [System.Collections.Generic.List[string]]::new()
+                        for ($ai = 0; $ai -lt $argList.Count; $ai++) {
+                            $a = [string]$argList[$ai]
+                            if ($a -eq '-ss') { $newArgs.Add($a); $newArgs.Add($fmtSec); $ai++; continue }
+                            if ($a -eq '-b:v' -or $a -eq '-maxrate') { $newArgs.Add($a); $newArgs.Add("${segmentMbps}M"); $ai++; continue }
+                            if ($a -eq '-segment_list') { $newArgs.Add($a); $newArgs.Add($flatSegList); $ai++; continue }
+                            if ($a -eq '-segment_start_number') { $ai++; continue }
+                            if ($a -eq '-segment_wrap') { $newArgs.Add($a); $newArgs.Add([string]$argList[$ai + 1]); $newArgs.Add('-segment_start_number'); $newArgs.Add("$nextIdx"); $ai++; continue }
+                            $newArgs.Add($a)
+                        }
+                        $argList = @($newArgs)
+                        $ffArgLine = ($argList | ForEach-Object {
+                            if ($null -eq $_) { '""' }
+                            elseif ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' }
+                            else { $_ }
+                        }) -join ' '
+                        $failureLogCommandLine = (@($ffmpegExe) + $argList | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+                        $ffmpegChildLogs = New-FfmpegProcessLogPaths -ScriptPath $thisScriptPath -InputPath $fullInput
+                        $ffmpegStdOutLogPath = $ffmpegChildLogs.StdOut
+                        $ffmpegStdErrLogPath = $ffmpegChildLogs.StdErr
+                        $ffProc = Start-Process -FilePath $ffmpegExe -ArgumentList $ffArgLine -NoNewWindow -PassThru `
+                            -RedirectStandardInput $ffmpegStdInPath `
+                            -RedirectStandardOutput $ffmpegStdOutLogPath -RedirectStandardError $ffmpegStdErrLogPath
+                        $flatRestarts++
+                        Write-Host ("[bitrate] Export restarted at {0:0.###} s (slot {1:D2}) with {2}M CBR (restart {3}); stderr log: {4}" -f $ssSec, $nextIdx, $segmentMbps, $flatRestarts, $ffmpegStdErrLogPath)
+                    } else {
+                        Write-Warning "[bitrate] Could not read the finished segment from $($flatSegList) - export stopped, not restarted."
+                        $flatAdaptive = $false
+                    }
+                    $flatPendingMbps = 0
+                    continue
+                }
+            }
+        }
         Start-Sleep -Milliseconds 500
     }
+    if ($flatSegList) { Remove-Item -LiteralPath $flatSegList -Force -ErrorAction SilentlyContinue }
     try { $ffProc.WaitForExit() } catch { }
     if ($exitCode -eq $script:ExitCodeTimeout) {
         # timeout already assigned
@@ -1617,6 +1714,7 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($ffmpegStdErrLogPath)) {
             $writtenSec = Get-FfmpegStderrMaxOutputTimeSec -StdErrPath $ffmpegStdErrLogPath
         }
+        $writtenSec += $flatEarlierSec
         $wrapStart = 0
         if ($isFisheyeTempPass2) { $wrapStart = [Math]::Max(0, [int]$DlnaSegmentStartNumber) }
         [void](Copy-DlnaWrapSlotIfShortClip -Directory $root -Suffix $SegmentNameSuffix `

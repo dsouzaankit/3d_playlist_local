@@ -35,6 +35,8 @@ param(
     [string] $SegmentOutputDirectory = '',
     [string] $SegmentNameSuffix = '',
     [int] $SegmentVideoBitrateMbps = 0,
+    # Below the PC -> Quest result in Run-TranscodeFfmpeg.ps1 (each chase round resolves it again).
+    [int] $SegmentVideoBitrateFallbackMbps = 0,
     [string] $TemplatePath = '',
     [string] $FisheyeV360Script = '',
     [int] $MezzanineVideoBitrateMbps = 50,
@@ -1034,6 +1036,8 @@ function Invoke-FisheyePass2TranscodePass {
     }
     if ($script:SegmentVideoBitrateMbps -gt 0) {
         $chasePassParams['SegmentVideoBitrateMbps'] = $script:SegmentVideoBitrateMbps
+    } elseif ($SegmentVideoBitrateFallbackMbps -gt 0) {
+        $chasePassParams['SegmentVideoBitrateFallbackMbps'] = $SegmentVideoBitrateFallbackMbps
     }
     if (-not [string]::IsNullOrWhiteSpace($segmentOutputRootFull)) {
         $chasePassParams['OutputDirectory'] = $segmentOutputRootFull
@@ -1307,6 +1311,8 @@ function Start-FisheyePass2ChaseWorker {
     }
     if ($script:SegmentVideoBitrateMbps -gt 0) {
         $argList += @('-SegmentVideoBitrateMbps', "$($script:SegmentVideoBitrateMbps)")
+    } elseif ($SegmentVideoBitrateFallbackMbps -gt 0) {
+        $argList += @('-SegmentVideoBitrateFallbackMbps', "$SegmentVideoBitrateFallbackMbps")
     }
     $p = Start-Process -FilePath $shell -ArgumentList (Format-ProcessArgumentLine $argList) -PassThru `
         -WorkingDirectory ([System.IO.Path]::GetDirectoryName($PrepareScriptPath)) `

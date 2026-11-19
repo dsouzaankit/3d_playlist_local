@@ -121,12 +121,12 @@ Run sequence:
 #
 # Quest headset (ios_3d_loop_segments, optional): hybrid / fisheye batch and the flat orchestrator call
 #   individual_transcode\Start-PlaylistQuestSession.ps1 at start (not -DryRun): in the background it holds the
-#   Quest proximity sensor off and opens the Quest control page in Quest Browser and in a fresh Chromium on the PC
-#   (closed again by End session or when the workflow ends). Every quit (End session or natural end) first force-stops the Quest
+#   Quest proximity sensor off and opens the Quest control page in Quest Browser; this window prints a sign-in
+#   link to the same page for the PC (optional, nothing opens there). Every quit (End session or natural end) first force-stops the Quest
 #   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
 #   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
 #   here; its End session button stops everything running: Quest players reading the output, Enter in every
-#   3d_playlist_local window (killed after ~3 min), the PC control page Chromium, then the Loop Segments companion
+#   3d_playlist_local window (killed after ~3 min), then the Loop Segments companion
 #   (its own quit cleans up the Quest, L: and the phone) - or, without the companion, the Quest cleanup itself
 #   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
@@ -193,7 +193,10 @@ Run sequence:
 #   Minute-segment encode bitrate (flat + fisheye pass-2): -SegmentVideoBitrateMbps, else
 #     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else the PC -> Quest LAN test the Quest control page runs on
 #     the headset at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json: 80% of measured, 5-100 Mbps,
-#     under 12 h old; re-read before every clip, so it applies from the next clip), else lan_recommended_segment_bitrate.json /
+#     under 12 h old; read by every encode: each ~1 min fisheye chase round; a running flat clip checks it every 5 s and
+#     restarts its ffmpeg at the next segment boundary when it moves >= 15% (same timestamp, next wrap slot, new -b:v) -
+#     so a test made after the start applies within ~1-2 min in both; the hybrid batch only pins a value you chose, otherwise it passes
+#     its sidecar result as -SegmentVideoBitrateFallbackMbps below the Quest result), else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
 #     default recommend = 80% of measured LAN Mbps). -SkipLanBitrateCap ignores sidecars (falls back to ~30M).
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution above asisAboveReferencePx
