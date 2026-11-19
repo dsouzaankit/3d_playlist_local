@@ -8,7 +8,7 @@
   ios_3d_loop_segments\windows\quest (PlaylistLocalQuestCommon.ps1 finds that repo).
   Called (hidden, fire and forget) by 3d_playlist_local\individual_transcode\Start-PlaylistQuestSession.ps1
   from run_batch_vr_hybrid.ps1, run_batch_fisheye_v360.ps1 and Run-TranscodeOrchestrator.ps1. It
-  starts three background processes and exits:
+  starts four background processes and exits:
 
     1. the Quest control page (Serve-QuestControlPage.ps1) on this PC's LAN address, until
        -WorkflowPid exits; reused when it already runs (for example the companion's);
@@ -17,7 +17,11 @@
        and holds the proximity sensor off (prox_close) once it is awake, re-applied every ~20 s;
     3. Watch-LoopSegmentsQuestLanTab.ps1 -OpenControlPage: waits for an awake headset (every 5 s,
        until the workflow ends; questPlaylistOpenWaitMinutes > 0 caps it) and opens the control page
-       in its own signed-in Quest Browser tab, where it also measures PC -> Quest.
+       in its own signed-in Quest Browser tab, where it also measures PC -> Quest;
+    4. Start-PlaylistLocalQuestSkybox.ps1 (this folder): once the headset is awake and the control
+       page open has finished, opens SKYBOX VR Player in front (Quest Browser keeps running
+       behind it) so the segments can be picked from the SKYBOX PC share. It only opens the app,
+       it does not start a video. questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0 skip it.
 
   Nothing opens on the PC; the workflow window prints a sign-in link to the page instead.
 
@@ -116,16 +120,36 @@ if ($have.Count) {
     Write-PlaylistQuestLog "Playlist session: keep-awake started (PID $($p.Id)): proximity sensor held off while the workflow runs."
 }
 
-# 3. Push the control page to the headset browser (waits for an awake headset).
+# 3. Push the control page to the headset browser (waits for an awake headset). Its -StatusFile
+#    tells step 4 when the browser is done coming to the front.
+$controlStatus = ''
 if (-not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $false)) {
     @(Get-PlaylistQuestHelperProcesses -Pattern '*-OpenControlPage*') | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force } catch {} }
+    $controlStatus = Join-Path $env:TEMP 'loopsegments-playlist-controlpage-status.txt'
+    Remove-Item -LiteralPath $controlStatus -Force -ErrorAction SilentlyContinue
     # 0 = until the workflow ends (the helper gets -ParentPid): the headset's Wi-Fi is usually off at a
     # workflow start, so it can take a while before it is on adb.
     $wait = 0
     try { if ($null -ne $cfg.questPlaylistOpenWaitMinutes) { $wait = [int]$cfg.questPlaylistOpenWaitMinutes } } catch {}
-    $args3 = @('-OpenControlPage', '-WaitMinutes', "$wait", '-ParentPid', "$WorkflowPid")
+    $args3 = @('-OpenControlPage', '-WaitMinutes', "$wait", '-ParentPid', "$WorkflowPid", '-StatusFile', $controlStatus)
     if ($url) { $args3 += @('-Url', $url) }
     $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments $args3
     Write-PlaylistQuestLog ("Playlist session: opening the control page on the headset (PID {0}, waits {1} for it to be awake)." -f $p.Id, $(if ($wait -gt 0) { "up to $wait min" } else { 'until the workflow ends' }))
+}
+
+# 4. SKYBOX in front once the headset is awake (after the control page open), so the segments can
+#    be picked from the SKYBOX PC share. questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0 skip it.
+if ($env:PLAYLIST_QUEST_SKYBOX -ne '0' -and -not ($cfg.Contains('questPlaylistLaunchSkybox') -and $cfg.questPlaylistLaunchSkybox -eq $false)) {
+    $skyScript = Join-Path $PSScriptRoot 'Start-PlaylistLocalQuestSkybox.ps1'
+    $haveSky = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $c = [string]$_.CommandLine; $c -like '*Start-PlaylistLocalQuestSkybox.ps1*' -and $c -match "-WorkflowPid\s+$WorkflowPid\b" })
+    if ($haveSky.Count) {
+        Write-PlaylistQuestLog "Playlist session: SKYBOX launch already queued for PID $WorkflowPid."
+    } else {
+        $args4 = @('-WorkflowPid', "$WorkflowPid")
+        if ($controlStatus) { $args4 += @('-ControlPageStatusFile', $controlStatus) }
+        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $skyScript -Arguments $args4
+        Write-PlaylistQuestLog "Playlist session: SKYBOX launch queued (PID $($p.Id)): opens in front once the headset is awake."
+    }
 }
 exit 0
