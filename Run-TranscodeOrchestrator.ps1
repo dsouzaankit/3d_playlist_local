@@ -1724,6 +1724,14 @@ Write-Host "Failure log: $transcodeFailureLogPath"
 if (Initialize-OrchestratorFailureLog -FailureLogPath $transcodeFailureLogPath) {
     Write-Host "Failure log ready: $transcodeFailureLogPath"
 }
+# Quest: proximity sensor off + Quest control page to the headset browser (its Enter button stops
+# this window and cleans up the Quest). ios_3d_loop_segments; PLAYLIST_QUEST_SESSION=0 skips.
+if (-not $DryRun) {
+    $questSessionScript = Join-Path $orchestratorRoot 'individual_transcode\Start-PlaylistQuestSession.ps1'
+    if (Test-Path -LiteralPath $questSessionScript -PathType Leaf) {
+        try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'flat' } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
+    }
+}
 Write-Host 'Press Space during a transcode to pause/resume DLNA export ffmpeg (3d_op_*.mkv). Enter cancels and exits.'
 Write-Host ''
 

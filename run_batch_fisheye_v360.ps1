@@ -948,6 +948,14 @@ try {
     }
 
     Write-Host "Batch queue: $($mediaLines.Count) clip(s) at start (live refresh before each clip)."
+    # Quest: proximity sensor off + Quest control page to the headset browser (its Enter button stops
+    # this window and cleans up the Quest). ios_3d_loop_segments; PLAYLIST_QUEST_SESSION=0 skips.
+    if (-not $DryRun) {
+        $questSessionScript = Join-Path $playlistLocal 'individual_transcode\Start-PlaylistQuestSession.ps1'
+        if (Test-Path -LiteralPath $questSessionScript -PathType Leaf) {
+            try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'fisheye' } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
+        }
+    }
     Write-Host "Batch control window pid=$PID - Space=pause/resume leaf export; Enter=cancel clip/batch."
     Write-Host ''
 

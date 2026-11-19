@@ -826,12 +826,21 @@ function Resolve-HybridLanSegmentBitrateMbps {
         return [pscustomobject]@{ Mbps = $ExplicitMbps; Source = '-SegmentVideoBitrateMbps' }
     }
 
-    $envRaw = [string]$env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS
+    # The user's env value from batch start: this batch sets the variable itself for its children.
+    $envRaw = [string]$script:HybridUserSegmentBitrateEnv
     if ($envRaw -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -gt 0) {
         return [pscustomobject]@{
             Mbps   = [int]$Matches[1]
             Source = 'LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS'
         }
+    }
+
+    # PC -> Quest LAN test from the Quest control page (the link DLNA segments travel).
+    $questHelper = Join-Path $playlistLocal 'individual_transcode\Get-QuestLanSegmentBitrate.ps1'
+    if (Test-Path -LiteralPath $questHelper -PathType Leaf) {
+        . $questHelper
+        $q = Get-QuestLanSegmentBitrateMbps
+        if ($q) { return $q }
     }
 
     $candidates = [System.Collections.Generic.List[string]]::new()
@@ -900,6 +909,7 @@ Write-Host ("  flat when:     <{0} kbps non-hevc/av1 or <{1} kbps hevc/av1; else
     $hybridCfg.FlatNonHevcAv1MaxKbps, $hybridCfg.FlatHevcAv1MaxKbps)
 Write-Host ("  bitrate miss:  default {0}" -f $hybridCfg.DefaultKindWhenBitrateUnknown)
 
+$script:HybridUserSegmentBitrateEnv = [string]$env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS
 $lanSegmentBitrate = Resolve-HybridLanSegmentBitrateMbps -MediaRoot $mediaRoot `
     -ExplicitMbps $SegmentVideoBitrateMbps -SkipLanBitrateCap:$SkipLanBitrateCap
 $script:HybridSegmentVideoBitrateMbps = [int]$lanSegmentBitrate.Mbps
@@ -1057,6 +1067,14 @@ try {
     }
 
     Write-Host "Batch queue: $($mediaLines.Count) clip(s) at start (live refresh before each clip)."
+    # Quest: proximity sensor off + Quest control page to the headset browser (its Enter button stops
+    # this window and cleans up the Quest). ios_3d_loop_segments; PLAYLIST_QUEST_SESSION=0 skips.
+    if (-not $DryRun) {
+        $questSessionScript = Join-Path $playlistLocal 'individual_transcode\Start-PlaylistQuestSession.ps1'
+        if (Test-Path -LiteralPath $questSessionScript -PathType Leaf) {
+            try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'hybrid' } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
+        }
+    }
     Write-Host "Batch control window pid=$PID - Space=pause/resume leaf export; Enter=cancel clip/batch."
     Write-Host ''
 
@@ -1177,6 +1195,21 @@ try {
         $mediaFull = [System.IO.Path]::GetFullPath($mediaLines[0])
         $baseName = [System.IO.Path]::GetFileName($mediaFull)
         $clipOrdinal++
+
+        # Segment bitrate again per clip: the Quest control page's PC -> Quest test usually lands after
+        # the batch started (headset waking, page opening).
+        $clipBitrate = Resolve-HybridLanSegmentBitrateMbps -MediaRoot $mediaRoot `
+            -ExplicitMbps $SegmentVideoBitrateMbps -SkipLanBitrateCap:$SkipLanBitrateCap
+        if ([int]$clipBitrate.Mbps -ne $script:HybridSegmentVideoBitrateMbps) {
+            $script:HybridSegmentVideoBitrateMbps = [int]$clipBitrate.Mbps
+            if ($script:HybridSegmentVideoBitrateMbps -gt 0) {
+                $env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS = [string]$script:HybridSegmentVideoBitrateMbps
+            } else {
+                Remove-Item Env:LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS -ErrorAction SilentlyContinue
+            }
+            Write-Host ("Minute segment cap now: {0} ({1})" -f `
+                $(if ($script:HybridSegmentVideoBitrateMbps -gt 0) { "$($script:HybridSegmentVideoBitrateMbps) Mbps" } else { 'default (~30 Mbps)' }), $clipBitrate.Source)
+        }
 
         # Defensive: eligible filter already requires existence; skip if raced with round-robin delete.
         if (-not (Test-Path -LiteralPath $mediaFull -PathType Leaf)) {

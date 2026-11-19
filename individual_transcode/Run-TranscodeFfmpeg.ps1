@@ -124,7 +124,9 @@
 
 .PARAMETER SegmentVideoBitrateMbps
   Flat / fisheye pass-2 segment encode CBR (av1_qsv). Default 0 = auto:
-  LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS env, then lan_throughput / lan_recommended_segment_bitrate.json
+  LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS env, then the PC -> Quest LAN test the Quest control page
+  runs at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json, 80% of measured, 5-100, under
+  12 h old; Get-QuestLanSegmentBitrate.ps1), then lan_throughput / lan_recommended_segment_bitrate.json
   sidecars on L:\pcld_ios_media (from Measure-LoopSegmentsLanThroughput.ps1), else 30M.
 
 .PARAMETER OrchestratorPid
@@ -525,6 +527,17 @@ function Resolve-SegmentVideoBitrateMbps {
         if ($fromEnv -gt 0) {
             Write-Host ("DLNA segment bitrate: {0}M from LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS" -f $fromEnv)
             return $fromEnv
+        }
+    }
+
+    # PC -> Quest (the link DLNA segments travel), measured by the Quest control page.
+    $questHelper = Join-Path $PSScriptRoot 'Get-QuestLanSegmentBitrate.ps1'
+    if (Test-Path -LiteralPath $questHelper -PathType Leaf) {
+        . $questHelper
+        $q = Get-QuestLanSegmentBitrateMbps
+        if ($q) {
+            Write-Host ("DLNA segment bitrate: {0}M from {1}" -f $q.Mbps, $q.Source)
+            return $q.Mbps
         }
     }
 

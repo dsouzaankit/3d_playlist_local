@@ -528,6 +528,27 @@ function Remove-DlnaSegmentRootSubst {
     }
 }
 
+# Quest session (Start-PlaylistQuestSession.ps1 sets PLAYLIST_QUEST_SESSION_PID to the workflow PID):
+# force-stop the Quest players reading the segments before quit cleanup renames them. Only in the
+# workflow process itself (per-clip children inherit the variable but have another PID). <= 30 s.
+function Stop-PlaylistQuestMediaAppsBeforeQuit {
+    if ([string]$env:PLAYLIST_QUEST_SESSION_PID -ne [string]$PID) { return }
+    if ($env:PLAYLIST_QUEST_PLAYERS_STOPPED -eq '1') { return }
+    $env:PLAYLIST_QUEST_PLAYERS_STOPPED = '1'
+    $repo = [string]$env:LOOPSEGMENTS_IOS_REPO
+    $watch = if ($repo) { Join-Path $repo 'windows\quest\Watch-LoopSegmentsQuestLanTab.ps1' } else { '' }
+    if (-not $watch -or -not (Test-Path -LiteralPath $watch -PathType Leaf)) { return }
+    $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) { return }
+    try {
+        Write-Host 'Quest: stopping players reading the segments (before quit cleanup)...'
+        $p = Start-Process -FilePath $pwsh -ArgumentList ('-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}" -StopMediaApps' -f $watch) -WindowStyle Hidden -PassThru
+        if (-not $p.WaitForExit(30000)) { try { $p.Kill() } catch {}; Write-Warning 'Quest: player stop timed out (30 s).' }
+    } catch {
+        Write-Warning ("Quest: player stop failed: {0}" -f $_.Exception.Message)
+    }
+}
+
 function Invoke-DlnaWorkflowQuitCleanup {
     <#
     .SYNOPSIS
@@ -552,6 +573,7 @@ function Invoke-DlnaWorkflowQuitCleanup {
     $obf = $null
     $subst = $null
     if (-not $DryRun.IsPresent) {
+        Stop-PlaylistQuestMediaAppsBeforeQuit
         try {
             Sync-SkyboxDlnaShareMapping -ExpectedRoot $script:DlnaSegmentRootPreferred -Removed
         } catch {

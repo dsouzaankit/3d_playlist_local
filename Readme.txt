@@ -119,6 +119,19 @@ Run sequence:
 # Deadline: -BatchTimeoutSec / -WorkflowTimeoutSec / -WorkflowDeadlineUtc still tick while export is paused (exit 124).
 # Messages: [leaf-export] Paused/Resumed N DLNA export ffmpeg process(es)...
 #
+# Quest headset (ios_3d_loop_segments, optional): hybrid / fisheye batch and the flat orchestrator call
+#   individual_transcode\Start-PlaylistQuestSession.ps1 at start (not -DryRun): in the background it holds the
+#   Quest proximity sensor off and opens the Quest control page in Quest Browser and in a fresh Chromium on the PC
+#   (closed again by End session or when the workflow ends). Every quit (End session or natural end) first force-stops the Quest
+#   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
+#   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
+#   here; its End session button stops everything running: Quest players reading the output, Enter in every
+#   3d_playlist_local window (killed after ~3 min), the PC control page Chromium, then the Loop Segments companion
+#   (its own quit cleans up the Quest, L: and the phone) - or, without the companion, the Quest cleanup itself
+#   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way.
+#   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
+#   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
+#
 # Why different poll code paths: flat orchestrator never shared the fisheye batch wait loop. Orchestrator uses one
 # ReadKey for Space+Enter; fisheye batch uses Invoke-BatchConsoleControlPoll (Win32 Enter queue + ReadKey fallback).
 # run_batch_convert_streamTo3D.ps1 has no transcode wait loop — keys are documented under orchestrator / fisheye batch.
@@ -178,7 +191,9 @@ Run sequence:
 #   Startup: Purge-OldAvs.ps1 -KeepCount 50 under .\avs (standalone purge = full wipe).
 #   av1_qsv integer CFR (same as flat / fisheye): 24/25/30/50/60; NTSC 29.97 tagged 30 via AssumeFPS.
 #   Minute-segment encode bitrate (flat + fisheye pass-2): -SegmentVideoBitrateMbps, else
-#     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else lan_recommended_segment_bitrate.json /
+#     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else the PC -> Quest LAN test the Quest control page runs on
+#     the headset at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json: 80% of measured, 5-100 Mbps,
+#     under 12 h old; re-read before every clip, so it applies from the next clip), else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
 #     default recommend = 80% of measured LAN Mbps). -SkipLanBitrateCap ignores sidecars (falls back to ~30M).
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution above asisAboveReferencePx
