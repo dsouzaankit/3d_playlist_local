@@ -143,7 +143,8 @@ if ($have.Count) {
 # 3. Push the control page to the headset browser (waits for an awake headset).
 if (-not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $false)) {
     @(Get-PlaylistQuestHelperProcesses -Pattern '*-OpenControlPage*') | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force } catch {} }
-    $wait = 30
+    # The companion's Open on Quest waits 7 min (_rest_log_sink.ps1); same default here.
+    $wait = 7
     try { if ($null -ne $cfg.questPlaylistOpenWaitMinutes) { $wait = [int]$cfg.questPlaylistOpenWaitMinutes } } catch {}
     $args3 = @('-OpenControlPage', '-WaitMinutes', "$wait", '-ParentPid', "$WorkflowPid")
     if ($url) { $args3 += @('-Url', $url) }
