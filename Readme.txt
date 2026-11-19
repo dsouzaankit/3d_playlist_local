@@ -124,7 +124,8 @@ Run sequence:
 #   Quest proximity sensor off and opens the Quest control page in Quest Browser; this window prints a sign-in
 #   link to the same page for the PC (optional, nothing opens there). Once the headset is awake and the page is open,
 #   SKYBOX VR Player is opened in front (quest\Start-PlaylistLocalQuestSkybox.ps1; app only - pick the segments from the
-#   SKYBOX PC share; off: $env:PLAYLIST_QUEST_SKYBOX='0' or questPlaylistLaunchSkybox=false). Every quit (End session or natural end) first force-stops the Quest
+#   SKYBOX PC share; SKYBOX not installed on the headset = logged, not launched; off: $env:PLAYLIST_QUEST_SKYBOX='0' or
+#   questPlaylistLaunchSkybox=false). Every quit (End session or natural end) first force-stops the Quest
 #   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
 #   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
 #   here; its End session button stops everything running: Quest players reading the output, Enter in every

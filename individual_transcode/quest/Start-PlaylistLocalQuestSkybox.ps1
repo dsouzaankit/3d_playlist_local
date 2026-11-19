@@ -17,7 +17,8 @@
 
   Finding the headset (adb connect, mDNS, adb server restart) is left to the keep-awake helper the
   session starts; this only reads `adb devices`. One launch per workflow: exits after SKYBOX is in
-  front (up to -LaunchAttempts tries) or when the workflow ends. The workflow quit force-stops
+  front (up to -LaunchAttempts tries) or when the workflow ends. SKYBOX not installed on the
+  headset (`pm path`): logged and exits 4 at once, no launch tries. The workflow quit force-stops
   SKYBOX as before (questPlaylistMediaPlayers).
 
   Off: questPlaylistLaunchSkybox=false (windows\loop-segments-windows.json) or
@@ -31,15 +32,14 @@ param(
     [string] $ControlPageStatusFile = '',
     [int] $ControlPageWaitSec = 90,
     [int] $PollSeconds = 5,
-    [int] $LaunchAttempts = 3
+    [int] $LaunchAttempts = 3,
+    [string] $SkyboxPackage = 'xyz.skybox.player.ovr'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PlaylistLocalQuestCommon.ps1')
-
-$SkyboxPackage = 'xyz.skybox.player.ovr'
 
 $cfg = Get-LoopSegmentsWindowsSettings
 if ($env:PLAYLIST_QUEST_SKYBOX -eq '0' -or ($cfg.Contains('questPlaylistLaunchSkybox') -and $cfg.questPlaylistLaunchSkybox -eq $false)) {
@@ -139,6 +139,15 @@ while ($true) {
             if (-not $awakeSince) { $awakeSince = [DateTime]::UtcNow }
             $settled = Test-PlaylistControlPageSettled
             if ($settled -or ([DateTime]::UtcNow - $awakeSince).TotalSeconds -ge $ControlPageWaitSec) {
+                # Not installed: monkey only prints "No activities found" - say so instead of retrying.
+                $pm = Invoke-PlaylistSkyboxAdb -Arguments @('-s', $dev, 'shell', 'pm', 'path', $SkyboxPackage) -TimeoutSec 10
+                if ($pm.Code -ne -1 -and ([string]$pm.Out) -notmatch '(?m)^package:') {
+                    if ($pm.Code -eq 0 -or ([string]$pm.Out + [string]$pm.Err) -notmatch '(?i)offline|not found|no devices|closed') {
+                        Write-PlaylistQuestLog "Playlist Skybox: SKYBOX ($SkyboxPackage) not installed on the headset ($dev) - not launched."
+                        exit 4
+                    }
+                    throw "pm path failed: $((([string]$pm.Out) + ' ' + ([string]$pm.Err)).Trim())"
+                }
                 if (-not $settled) { Write-PlaylistQuestLog "Playlist Skybox: control page not open after ${ControlPageWaitSec}s - launching SKYBOX anyway." }
                 for ($i = 1; $i -le $LaunchAttempts; $i++) {
                     [void](Invoke-PlaylistSkyboxAdb -Arguments @('-s', $dev, 'shell', 'monkey', '-p', $SkyboxPackage, '-c', 'android.intent.category.LAUNCHER', '1') -TimeoutSec 15)
