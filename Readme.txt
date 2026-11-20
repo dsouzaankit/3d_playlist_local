@@ -344,7 +344,11 @@ Run sequence:
 # May not format vertical videos correctly!
 # Standardization using ffmpeg appears thread-safe but can overload system!
 # Vertical videos will be gradually standardized and prioritized during 2nd flat batch attempt (after 1st successful attempt)!
-# 'media_files.txt' will auto-refresh on batch runs!
+# 'media_files.txt' will auto-refresh on batch runs! (generate_media_listings_lcl.py at every batch start, -DryRun too)
+#   Recursive walk of the media root, but one media_files.txt PER FOLDER listing only that folder's own files
+#   (oldest first) - not one combined list; a launcher queues only its own folder's list.
+#   Listed: .mp4 .wmv .ts .mkv only (.webm / .m4v / .avi skipped); macOS ._name sidecars ignored;
+#   3d_playlist_local\standardized\<same name> listed instead of the original when present.
 # Folder watcher (both workflows): Watch-MediaFolderPlaylists.ps1
 #   Polls media root in background; on new/changed media or flat .avs refreshes media_files.txt,
 #   fisheye_batch.m3u/_potplayer.dpl, and playlist.m3u/playlist_potplayer.dpl (via gen_dpl.py).
@@ -352,7 +356,8 @@ Run sequence:
 #   Fisheye/hybrid batch and flat orchestrator both continue after the current clip through the live playlist tail;
 #   on empty tail they reset the cursor to the oldest live item, then one idle poll (-LiveQueueIdlePollSec, default 20s) if still empty.
 #   Manual: .\3d_playlist_local\Watch-MediaFolderPlaylists.ps1 [-Once] [-PollSeconds 60] [-Foreground]
-#   Opt out: -SkipMediaFolderWatcher on either batch script. Logs: individual_transcode\transcode_logs\media_folder_watcher\
+#   Polls recursively every 60 s; keeps running after the batch ends (stop its hidden powershell.exe to end it).
+#   Opt out: -SkipMediaFolderWatcher on either batch script (also not started with -DryRun). Logs: individual_transcode\transcode_logs\media_folder_watcher\
 
 # optional/as-needed
 # <root>\global_rand_3d_playlist\purge_old_data.py
