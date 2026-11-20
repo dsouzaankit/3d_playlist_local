@@ -25,10 +25,11 @@ Run sequence:
 #   How launchers find <root> (individual_transcode\Resolve-AllScriptsRoot.ps1; the run_batch_*.ps1
 #   launchers carry an inline copy because they run before 3d_playlist_local is synced):
 #     ALL_SCRIPTS_ROOT env var (process, then User) -> walk up from the running script ->
+#     <same drive as the launcher>:ll_scripts (I: media uses I:ll_scripts with no setup step) ->
 #     %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt -> <any ready drive>:\all_scripts -> P:\all_scripts.
 #     A folder counts only if it has 3d_playlist_local\individual_transcode\ AND setup_venv.bat or py_venv1\.
 #     Running a launcher from the master copy (or the drive scan) re-registers the pointer, so the copy
-#     you set up or ran last wins when two copies exist. Pin one with: setx ALL_SCRIPTS_ROOT I:\all_scripts
+#     you set up or ran last wins for media on drives WITHOUT their own <drive>:ll_scripts. Pin one with: setx ALL_SCRIPTS_ROOT I:\all_scripts
 #   The launchers export ALL_SCRIPTS_ROOT to child scripts (companion AutoHotkey, hybrid_workflow.json,
 #   Skybox_vr_pc, "iOS apps"\ios_3d_loop_segments for the Quest session).
 #   setup_venv.bat uses its own folder (%~dp0) and rebuilds py_venv1 only when its python is missing or

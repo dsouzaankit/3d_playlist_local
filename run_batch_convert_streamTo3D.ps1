@@ -19,7 +19,7 @@ if ((Split-Path -Leaf $scriptDir) -ieq '3d_playlist_local') {
 }
 # Scripts root = folder holding 3d_playlist_local\, py_venv1\, setup_venv.bat, AutoHotkey\ (any drive/path).
 # Inline copy of individual_transcode\Resolve-AllScriptsRoot.ps1: this launcher runs from media folders
-# before 3d_playlist_local is synced. Order: ALL_SCRIPTS_ROOT env -> walk up from this script ->
+# before 3d_playlist_local is synced. Order: ALL_SCRIPTS_ROOT env -> walk up from this script -> <same drive>:ll_scripts ->
 # %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt -> <any drive>:\all_scripts -> legacy P:\all_scripts.
 function Resolve-BatchAllScriptsRoot {
     param([string] $StartPath)
@@ -44,6 +44,13 @@ function Resolve-BatchAllScriptsRoot {
             if (& $test $walk) { $found = $walk; $persist = $true; break }
             $walk = Split-Path -Parent $walk
         }
+    }
+    if (-not $found -and -not [string]::IsNullOrWhiteSpace($StartPath)) {
+        # Same drive as this launcher (I: media -> I:ll_scripts) before the pointer; not persisted.
+        try {
+            $cand = [System.IO.Path]::Combine([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($StartPath)), 'all_scripts')
+            if (& $test $cand) { $found = $cand }
+        } catch { }
     }
     if (-not $found -and (Test-Path -LiteralPath $pointer -PathType Leaf)) {
         try {

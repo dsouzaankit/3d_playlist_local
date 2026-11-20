@@ -10,6 +10,7 @@
 
     1. $env:ALL_SCRIPTS_ROOT (process, then User-scope environment variable)
     2. Walk up from -StartPath / this script's folder (works when run from the master copy)
+    2b. <same drive as -StartPath / this script>:ll_scripts (not persisted)
     3. Pointer file %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt
        (written by setup_script_files.py and whenever the master copy is found by 2 or 4)
     4. Any ready drive: <X>:\all_scripts
@@ -109,6 +110,19 @@ function Resolve-AllScriptsRoot {
             if (Test-AllScriptsRoot -Path $walk) { return (& $register $walk) }
             $walk = Split-Path -Parent $walk
         }
+    }
+
+    # Same drive as the running script / media folder (I: media -> I:\all_scripts) before the pointer.
+    # Not persisted, so the pointer keeps serving media on drives without their own copy.
+    foreach ($start in @($StartPath, $PSScriptRoot)) {
+        if ([string]::IsNullOrWhiteSpace($start)) { continue }
+        try {
+            $qual = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($start))
+            if (-not [string]::IsNullOrWhiteSpace($qual)) {
+                $cand = Join-Path $qual 'all_scripts'
+                if (Test-AllScriptsRoot -Path $cand) { return [System.IO.Path]::GetFullPath($cand).TrimEnd('\') }
+            }
+        } catch { }
     }
 
     $pointer = Get-AllScriptsRootPointerPath
