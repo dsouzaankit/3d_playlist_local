@@ -129,6 +129,12 @@ Run sequence:
 #       -IncludeFisheyeTemp   also pass-1 mezzanines (fisheye_temp\*.fisheye.frag.mp4)
 #       -IncludeLegacyRoots   also <drive>:\{m1_media,f1_media,k1_media}\3d_fullsbs_trans
 #       -Root <path[]>  -NoStopLeafExport  -NoPause
+#   Which one: Cleanup-DlnaSegmentExports.ps1 for routine "clear old segments / free space before a run"
+#     (keeps .avs + logs for debugging, no side effects). Cleanup-DlnaSegmentRoot.ps1 for a clean slate
+#     (e.g. after a crash): wipes everything under the root - segments, hidden .tmp copies, fisheye_temp
+#     mezzanines + avs, logs (unless -KeepLogs), .dlna_obf_map.json - and maps M: / restores hidden media
+#     first. Its -DryRun gives counts only; the exports script lists each file with its size.
+#     Both stop leaf export ffmpeg first (-NoStopLeafExport skips) and recreate the empty folder tree.
 #
 #
 # Console controls (Space / Enter) — see matrix below; implementation in:
