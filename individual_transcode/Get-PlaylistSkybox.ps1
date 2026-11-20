@@ -27,6 +27,9 @@ function Get-PlaylistSkyboxVrPcRoot {
         [void]$candidates.Add((Join-Path $walk 'Skybox_vr_pc'))
         $walk = Split-Path -Parent $walk
     }
+    if (-not [string]::IsNullOrWhiteSpace($env:ALL_SCRIPTS_ROOT)) {
+        [void]$candidates.Add((Join-Path $env:ALL_SCRIPTS_ROOT 'Skybox_vr_pc'))
+    }
     [void]$candidates.Add('P:\all_scripts\Skybox_vr_pc')
     foreach ($root in $candidates) {
         if ([string]::IsNullOrWhiteSpace($root)) { continue }
@@ -51,7 +54,7 @@ if ($script:PlaylistSkyboxVrPcRootResolved) {
     . (Join-Path $script:PlaylistSkyboxVrPcRootResolved 'SkyboxVrPc.UnmapPath.ps1')
     $script:PlaylistSkyboxVrPcImported = $true
 } else {
-    Write-Warning '[skybox] Skybox_vr_pc not found (expected ./Skybox_vr_pc submodule, P:\all_scripts\Skybox_vr_pc, or SKYBOX_VR_PC_ROOT).'
+    Write-Warning '[skybox] Skybox_vr_pc not found (expected ./Skybox_vr_pc submodule, <scripts root>\Skybox_vr_pc, or SKYBOX_VR_PC_ROOT).'
 }
 
 function Get-SkyboxPcClientStartedMarkerPath {

@@ -1,15 +1,44 @@
 Run sequence:
 
 # Script layout (flat / fisheye / hybrid)
-#   Canonical scripts: P:\all_scripts\3d_playlist_local  (robocopy source at batch start)
+#   Scripts root:      the folder holding 3d_playlist_local\, py_venv1\, setup_venv.bat, AutoHotkey\,
+#                      Skybox_vr_pc\ ("iOS apps"\ optional). Default P:\all_scripts, but ANY drive/path works
+#                      (see "Moving the scripts root to another drive" below). Written as <root> here.
+#   Canonical scripts: <root>\3d_playlist_local  (robocopy source at batch start)
 #                      F:\all_scripts hub is retired — do not sync or run from F:\all_scripts
-#   Deploy:            P:\all_scripts\3d_playlist_local -> each {media}\3d_playlist_local
+#   Deploy:            <root>\3d_playlist_local -> each {media}\3d_playlist_local
 #                      (+ parent run_batch_*.ps1 launchers beside media_files.txt)
-#   Web companion hub: P:\p_cld_media\web_compann_plst\ (no local source media)
+#   Web companion hub: P:\p_cld_media\web_compann_plst\ (no local source media; skipped if P: is absent)
 #                      ios_3d_loop_segments pCloud companion Ctrl+Shift+H overwrites media_files.txt
 #                      with selected video Drive paths (absolute P:\…); run any run_batch_*.ps1 beside the list.
 #                      Deploy hub: setup_script_files.py (copies 3 launchers + 3d_playlist_local\).
-#   Other deps:        P:\all_scripts\py_venv1, P:\all_scripts\setup_venv.bat, P:\all_scripts\AutoHotkey
+#   Other deps:        <root>\py_venv1, <root>\setup_venv.bat, <root>\AutoHotkey
+#
+# Moving the scripts root to another drive (e.g. P:\all_scripts -> I:\all_scripts):
+#   1. Copy the whole scripts folder to the new location first (any drive / any path).
+#   2. From the NEW copy run:  <newroot>\py_venv1\Scripts\python.exe <newroot>\3d_playlist_local\setup_script_files.py
+#        [MEDIA_ROOT ...] [--hub PATH | --no-hub]
+#      It records the new root in %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt and redeploys
+#      the 3 launchers to every media folder under MEDIA_ROOT (default: F:\f1_media, E:\e1_media,
+#      D:\d1_media, P:\p_cld_media, L:\pcld_ios_media; missing roots are skipped).
+#   3. Run any run_batch_*.ps1 beside media_files.txt as before. The console prints "Scripts root: ...".
+#   How launchers find <root> (individual_transcode\Resolve-AllScriptsRoot.ps1; the run_batch_*.ps1
+#   launchers carry an inline copy because they run before 3d_playlist_local is synced):
+#     ALL_SCRIPTS_ROOT env var (process, then User) -> walk up from the running script ->
+#     %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt -> <any ready drive>:\all_scripts -> P:\all_scripts.
+#     A folder counts only if it has 3d_playlist_local\individual_transcode\ AND setup_venv.bat or py_venv1\.
+#     Running a launcher from the master copy (or the drive scan) re-registers the pointer, so the copy
+#     you set up or ran last wins when two copies exist. Pin one with: setx ALL_SCRIPTS_ROOT I:\all_scripts
+#   The launchers export ALL_SCRIPTS_ROOT to child scripts (companion AutoHotkey, hybrid_workflow.json,
+#   Skybox_vr_pc, "iOS apps"\ios_3d_loop_segments for the Quest session).
+#   setup_venv.bat uses its own folder (%~dp0) and rebuilds py_venv1 only when its python is missing or
+#   broken (a copied venv still runs: pyvenv.cfg home= is the base Python on C:). It calls the venv python
+#   directly (a copied activate.bat still points at the old drive). Requires `py -3.12` on the PC.
+#   Still drive-specific by design: media roots, the web companion hub, Skybox_vr_pc\skybox_vr_pc.config.json
+#   SharePath (P:\p_cld_media) and the dummy M: DLNA output letter.
+#   Virtual / cloud drives (e.g. Icedrive): Defender may quarantine the compiled AutoHotkey *.exe
+#   (Trojan:Win32/Bearfoos.B!ml, false positive) while it syncs, so robocopy reports exit 8 for that file.
+#   Restore / allow it in Windows Security, or run with -SkipCompanionBinaries.
 #                      Skybox PC client helpers: git submodule Skybox_vr_pc (github.com/dsouzaankit/skybox-vr-pc)
 #                      After clone: git submodule update --init. Override root with SKYBOX_VR_PC_ROOT.
 #   Context menu:      run individual_transcode\Install-ContextMenu.ps1 once per user from the deploy copy you want Explorer to use
@@ -20,11 +49,11 @@ Run sequence:
 #                  standalone/double-click = full purge of .\avs; workflows pass -KeepCount 50 (newest only)
 #
 # Manual refresh of a media-side deploy copy (same flags as batch robocopy):
-#   robocopy P:\all_scripts\3d_playlist_local {media}\3d_playlist_local /E /XF *.log /XD ai ign .git standardized avs op_logs transcode_logs
+#   robocopy <root>\3d_playlist_local {media}\3d_playlist_local /E /XF *.log /XD ai ign .git standardized avs op_logs transcode_logs
 #   /XF keeps local *.log; /XD skips chat dumps, ign\, .git, media/runtime trees so P:/L: cloud sync stays light.
 #
 # LAN / bandwidth: if DLNA or segment viewing stalls from network bandwidth issues, reboot routers
-#   using scripts in P:\all_scripts\5g_router_reboot
+#   using scripts in <root>\5g_router_reboot
 #
 # Source media accessibility (flat / fisheye / hybrid):
 #   Before each clip: Test-Path on the queue item; if missing/inaccessible (e.g. network drive
@@ -88,6 +117,17 @@ Run sequence:
 #     (script; calls function Clear-DlnaSegmentRootContents in individual_transcode\) - covers
 #     flat+fisheye+hybrid+fisheye_temp\avs under the shared root. Playlist-local transcode_logs\
 #     are never under this root.
+#   Delete old/existing segment exports only (all workflows): Cleanup-DlnaSegmentExports.ps1 (beside this Readme)
+#     (calls Remove-DlnaWorkflowSegmentExports in individual_transcode\Invoke-LeafFfmpegControl.ps1)
+#     Deletes 3d_op_*.mkv in flat\ fisheye\ hybrid\ (Full_SBS / LR_180_FISHEYE / LR_180 as-is, context menu
+#     too) plus their quit-obfuscated <sha256>.tmp / _dlna_obf_* copies, and drops those .dlna_obf_map.json
+#     entries. Keeps fisheye_temp\avs, logs and the folder tree. Reads the %AppData%\3d_playlist_local store
+#     directly (no subst M:, no restore, no Skybox start). Stops leaf export ffmpeg first.
+#       .\Cleanup-DlnaSegmentExports.ps1 -DryRun              # list files + sizes, delete nothing
+#       .\Cleanup-DlnaSegmentExports.ps1                      # delete
+#       -IncludeFisheyeTemp   also pass-1 mezzanines (fisheye_temp\*.fisheye.frag.mp4)
+#       -IncludeLegacyRoots   also <drive>:\{m1_media,f1_media,k1_media}\3d_fullsbs_trans
+#       -Root <path[]>  -NoStopLeafExport  -NoPause
 #
 #
 # Console controls (Space / Enter) — see matrix below; implementation in:
@@ -249,7 +289,7 @@ Run sequence:
 #   cursor to the oldest live item (skips completed-this-run paths). If still empty, waits one idle poll
 #   (-LiveQueueIdlePollSec, default 20s; separate from -MediaFolderWatcherPollSec) then finishes
 #   (or until BatchTimeoutSec / Enter).
-#   AutoHotkey companions from P:\all_scripts\AutoHotkey (or -SkipPotPlayer / -SkipCompanionBinaries).
+#   AutoHotkey companions from <root>\AutoHotkey (or -SkipPotPlayer / -SkipCompanionBinaries).
 #   -BatchTimeoutSec 5400 entire queue; prepare children get -WorkflowDeadlineUtc (not per-clip timeout).
 #   DPL playtime (first batch clip only, 30s backoff): pass-1 mezzanine -SsSec; pass-2 from mezzanine t=0.
 #   -SkipPotPlayerSeek: pass-1 and pass-2 start at 0s for every clip.
@@ -305,4 +345,4 @@ Run sequence:
 #   Opt out: -SkipMediaFolderWatcher on either batch script. Logs: individual_transcode\transcode_logs\media_folder_watcher\
 
 # optional/as-needed
-# P:\all_scripts\global_rand_3d_playlist\purge_old_data.py
+# <root>\global_rand_3d_playlist\purge_old_data.py

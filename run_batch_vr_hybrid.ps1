@@ -15,7 +15,8 @@ param(
     [string] $ResumeAfter = '',
     [switch] $SkipPotPlayer,
     [string] $PotPlayerExe = '',
-    [string] $CompanionBinaryFolder = 'P:\all_scripts\AutoHotkey',
+    # Default '' = <scripts root>\AutoHotkey (resolved after scripts-root lookup; any drive).
+    [string] $CompanionBinaryFolder = '',
     [switch] $SkipCompanionBinaries,
     [switch] $SkipPotPlayerSeek,
     [ValidateSet('Poll', 'Sync')]
@@ -49,8 +50,80 @@ if ((Split-Path -Leaf $scriptDir) -ieq '3d_playlist_local') {
     $mediaRoot = $scriptDir
     $playlistLocal = Join-Path $mediaRoot '3d_playlist_local'
 }
-$syncSource = 'P:\all_scripts\3d_playlist_local'
-$pythonExe = 'P:\all_scripts\py_venv1\Scripts\python.exe'
+# Scripts root = folder holding 3d_playlist_local\, py_venv1\, setup_venv.bat, AutoHotkey\ (any drive/path).
+# Inline copy of individual_transcode\Resolve-AllScriptsRoot.ps1: this launcher runs from media folders
+# before 3d_playlist_local is synced. Order: ALL_SCRIPTS_ROOT env -> walk up from this script ->
+# %LOCALAPPDATA%\3d_playlist_local\all_scripts_root.txt -> <any drive>:\all_scripts -> legacy P:\all_scripts.
+function Resolve-BatchAllScriptsRoot {
+    param([string] $StartPath)
+    $test = {
+        param($p)
+        if ([string]::IsNullOrWhiteSpace($p)) { return $false }
+        try { $p = [System.IO.Path]::GetFullPath($p.Trim().Trim('"')) } catch { return $false }
+        return ((Test-Path -LiteralPath ([System.IO.Path]::Combine($p, '3d_playlist_local', 'individual_transcode', 'Invoke-LeafFfmpegControl.ps1')) -PathType Leaf) -and
+            ((Test-Path -LiteralPath ([System.IO.Path]::Combine($p, 'setup_venv.bat')) -PathType Leaf) -or
+             (Test-Path -LiteralPath ([System.IO.Path]::Combine($p, 'py_venv1')) -PathType Container)))
+    }
+    $pointer = [System.IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'), '3d_playlist_local', 'all_scripts_root.txt')
+    $found = $null
+    $persist = $false
+    foreach ($v in @([Environment]::GetEnvironmentVariable('ALL_SCRIPTS_ROOT', 'Process'),
+                     [Environment]::GetEnvironmentVariable('ALL_SCRIPTS_ROOT', 'User'))) {
+        if (& $test $v) { $found = $v.Trim().Trim('"'); break }
+    }
+    if (-not $found) {
+        $walk = $StartPath
+        for ($i = 0; $i -lt 6 -and -not [string]::IsNullOrWhiteSpace($walk); $i++) {
+            if (& $test $walk) { $found = $walk; $persist = $true; break }
+            $walk = Split-Path -Parent $walk
+        }
+    }
+    if (-not $found -and (Test-Path -LiteralPath $pointer -PathType Leaf)) {
+        try {
+            $p = ([System.IO.File]::ReadAllText($pointer)).Trim()
+            if (& $test $p) { $found = $p }
+        } catch { }
+    }
+    if (-not $found) {
+        foreach ($d in @([System.IO.DriveInfo]::GetDrives())) {
+            try {
+                if ($d.DriveType -notin @('Fixed', 'Removable', 'Network') -or -not $d.IsReady) { continue }
+                $cand = [System.IO.Path]::Combine($d.RootDirectory.FullName, 'all_scripts')
+                if (& $test $cand) { $found = $cand; $persist = $true; break }
+            } catch { }
+        }
+    }
+    if (-not $found -and (& $test 'P:\all_scripts')) { $found = 'P:\all_scripts' }
+    if (-not $found) { return $null }
+    $found = [System.IO.Path]::GetFullPath($found).TrimEnd('\')
+    if ($persist) {
+        try {
+            $cur = if (Test-Path -LiteralPath $pointer -PathType Leaf) { ([System.IO.File]::ReadAllText($pointer)).Trim() } else { '' }
+            if ($cur -ine $found) {
+                [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($pointer))
+                [System.IO.File]::WriteAllText($pointer, $found)
+            }
+        } catch { }
+    }
+    return $found
+}
+$allScriptsRoot = Resolve-BatchAllScriptsRoot -StartPath $scriptDir
+if ($allScriptsRoot) {
+    Write-Host "Scripts root: $allScriptsRoot"
+    $syncSource = [System.IO.Path]::Combine($allScriptsRoot, '3d_playlist_local')
+    $pythonExe = [System.IO.Path]::Combine($allScriptsRoot, 'py_venv1', 'Scripts', 'python.exe')
+    $setupVenvBat = [System.IO.Path]::Combine($allScriptsRoot, 'setup_venv.bat')
+    $companionSyncSource = [System.IO.Path]::Combine($allScriptsRoot, 'AutoHotkey')
+} else {
+    Write-Warning ("Scripts root not found (folder with 3d_playlist_local + setup_venv.bat / py_venv1). " +
+        "Run setup_script_files.py from the copied scripts folder or set ALL_SCRIPTS_ROOT. Using local copy: $playlistLocal")
+    $syncSource = $playlistLocal
+    $pyCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+    $pythonExe = if ($null -ne $pyCmd) { $pyCmd.Source } else { [System.IO.Path]::Combine($playlistLocal, 'py_venv1', 'Scripts', 'python.exe') }
+    $setupVenvBat = [System.IO.Path]::Combine($playlistLocal, 'setup_venv.bat.missing')
+    $companionSyncSource = [System.IO.Path]::Combine($playlistLocal, 'AutoHotkey')
+}
+if ($allScriptsRoot) { $env:ALL_SCRIPTS_ROOT = $allScriptsRoot }
 # Ensure Skybox DLNA root (dummy subst M: + AppData store) before any Join-Path on M:\... (pwsh validates drive letters).
 $leafEarly = Join-Path $syncSource 'individual_transcode\Invoke-LeafFfmpegControl.ps1'
 if (-not (Test-Path -LiteralPath $leafEarly -PathType Leaf)) {
@@ -114,6 +187,10 @@ function Invoke-SafeRobocopySync {
     if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
         Write-Warning "Robocopy skipped (source missing): $Source"
         return $false
+    }
+    if ([System.IO.Path]::GetFullPath($Source).TrimEnd('\') -ieq [System.IO.Path]::GetFullPath($Destination).TrimEnd('\')) {
+        Write-Host "Robocopy skipped (source is destination): $Source"
+        return $true
     }
     if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
         [void][System.IO.Directory]::CreateDirectory($Destination)
@@ -370,7 +447,6 @@ function New-HybridBatchChildLogPaths {
     }
 }
 
-$setupVenvBat = 'P:\all_scripts\setup_venv.bat'
 if (Test-Path -LiteralPath $setupVenvBat) {
     $venvResult = Invoke-SafeNativeCommand -SuccessExitCodes @(0) -Command { & $setupVenvBat }
     if (-not $venvResult.Ok) {
@@ -418,7 +494,7 @@ if ($env:HYBRID_BATCH_USING_SYNCED -ne '1') {
     }
 }
 
-$companionSyncSource = 'P:\all_scripts\AutoHotkey'
+if ([string]::IsNullOrWhiteSpace($CompanionBinaryFolder)) { $CompanionBinaryFolder = $companionSyncSource }
 $companionLocal = Join-Path $playlistLocal 'AutoHotkey'
 if (Test-Path -LiteralPath $companionSyncSource -PathType Container) {
     Invoke-SafeRobocopySync -Source $companionSyncSource -Destination $companionLocal | Out-Null

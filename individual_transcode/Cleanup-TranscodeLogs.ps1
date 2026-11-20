@@ -22,7 +22,7 @@
 
 .PARAMETER DiscoverMediaRoots
   Top-level folders to search for *\3d_playlist_local\individual_transcode\transcode_logs.
-  Default: F:\f1_media, P:\bbf_media, P:\all_scripts
+  Default: M:\m1_media, F:\f1_media, P:\bbf_media, <scripts root> (any drive)
 
 .PARAMETER IncludeFisheyeTempLogs
   Also delete *.log under FisheyeTempLogsRoot. Default: true.
@@ -81,7 +81,7 @@
 param(
     [string] $LogsRoot = '',
     [switch] $LocalOnly,
-    [string[]] $DiscoverMediaRoots = @('M:\m1_media', 'F:\f1_media', 'P:\bbf_media', 'P:\all_scripts'),
+    [string[]] $DiscoverMediaRoots = @('M:\m1_media', 'F:\f1_media', 'P:\bbf_media', '<scripts root>'),
     [switch] $IncludeFisheyeTempLogs,
     [string] $FisheyeTempLogsRoot = 'M:\m1_media\3d_fullsbs_trans\fisheye_temp\logs',
     [switch] $NoFisheyeTempLogs,
@@ -101,6 +101,17 @@ $ErrorActionPreference = 'Stop'
 if (-not $PSBoundParameters.ContainsKey('IncludeFisheyeTempLogs') -and -not $NoFisheyeTempLogs) {
     $IncludeFisheyeTempLogs = $true
 }
+
+# '<scripts root>' = folder holding 3d_playlist_local (any drive; Resolve-AllScriptsRoot.ps1).
+$allScriptsResolver = Join-Path $PSScriptRoot 'Resolve-AllScriptsRoot.ps1'
+$resolvedScriptsRoot = $null
+if (Test-Path -LiteralPath $allScriptsResolver -PathType Leaf) {
+    . $allScriptsResolver
+    $resolvedScriptsRoot = Resolve-AllScriptsRoot -StartPath $PSScriptRoot
+}
+$DiscoverMediaRoots = @($DiscoverMediaRoots | ForEach-Object {
+    if ($_ -eq '<scripts root>') { if ($resolvedScriptsRoot) { $resolvedScriptsRoot } } else { $_ }
+} | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
 $leafFfmpegControlScript = Join-Path $PSScriptRoot 'Invoke-LeafFfmpegControl.ps1'
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {

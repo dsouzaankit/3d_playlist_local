@@ -91,17 +91,66 @@ def deploy_web_companion_hub(hub_dir):
             log(f"An error occurred copying {init_ps_file} -> {hub_dir}: {e}")
 
 
+def register_scripts_root():
+    """Record the scripts root (parent of this 3d_playlist_local) so launchers deployed to media
+    folders find it on any drive. Same pointer file as individual_transcode\\Resolve-AllScriptsRoot.ps1."""
+    scripts_root = os.path.dirname(_SCRIPT_DIR)
+    # LOCALAPPDATA, not APPDATA\\3d_playlist_local (that folder is the DLNA segment store / Skybox share).
+    app_data = os.environ.get('LOCALAPPDATA')
+    if not app_data:
+        log('LOCALAPPDATA not set; scripts-root pointer not written (set ALL_SCRIPTS_ROOT instead).')
+        return scripts_root
+    pointer = os.path.join(app_data, '3d_playlist_local', 'all_scripts_root.txt')
+    try:
+        os.makedirs(os.path.dirname(pointer), exist_ok=True)
+        with open(pointer, 'w', encoding='utf-8') as fh:
+            fh.write(scripts_root)
+        log(f"Scripts root registered: {scripts_root} -> {pointer}")
+    except OSError as e:
+        log(f"Could not write scripts-root pointer {pointer}: {e}")
+    return scripts_root
+
+
+def parse_args(argv):
+    """setup_script_files.py [MEDIA_ROOT ...] [--hub PATH | --no-hub]
+    No MEDIA_ROOT -> DEFAULT_MEDIA_ROOTS. Missing roots/drives are skipped."""
+    roots, hub, i = [], DEFAULT_WEB_COMPANION_HUB, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '--no-hub':
+            hub = None
+        elif a == '--hub' and i + 1 < len(argv):
+            i += 1
+            hub = argv[i]
+        else:
+            roots.append(a)
+        i += 1
+    return (roots or list(DEFAULT_MEDIA_ROOTS)), hub
+
+
+DEFAULT_MEDIA_ROOTS = ['F:\\f1_media', 'E:\\e1_media', 'D:\\d1_media', 'P:\\p_cld_media', 'L:\\pcld_ios_media']
+DEFAULT_WEB_COMPANION_HUB = r'P:\p_cld_media\web_compann_plst'
+
+
 if __name__ == '__main__':
     configure_stdio()
+    register_scripts_root()
     log(f"Copying batch launchers from: {_SCRIPT_DIR}")
     log(f"Files: {', '.join(init_ps_files)}")
-    root_dirs = ['F:\\f1_media', 'E:\\e1_media', 'D:\\d1_media', 'P:\\p_cld_media', 'L:\\pcld_ios_media']
+    root_dirs, web_companion_hub = parse_args(sys.argv[1:])
     for root_dir in root_dirs:
-        # Replace 'your_root_directory_path' with the actual path you want to scan
+        if not os.path.isdir(root_dir):
+            log(f"Media root not found, skipping: {root_dir}")
+            continue
         push_code_to_subdirectories(root_dir)
-    web_companion_hub = r'P:\p_cld_media\web_compann_plst'
-    log(f"Deploying web companion hub: {web_companion_hub}")
-    deploy_web_companion_hub(web_companion_hub)
+    hub_drive = os.path.splitdrive(web_companion_hub)[0] if web_companion_hub else ''
+    if not web_companion_hub:
+        log('Web companion hub skipped (--no-hub).')
+    elif hub_drive and not os.path.isdir(hub_drive + os.sep):
+        log(f"Web companion hub skipped (drive {hub_drive} not present): {web_companion_hub}")
+    else:
+        log(f"Deploying web companion hub: {web_companion_hub}")
+        deploy_web_companion_hub(web_companion_hub)
     try:
         input('Done. Press Enter to close...')
     except EOFError:

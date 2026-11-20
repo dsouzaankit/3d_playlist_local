@@ -1242,12 +1242,14 @@ function Resolve-CompanionBinaryFolder {
     if (-not [string]::IsNullOrWhiteSpace($PlaylistLocal)) {
         [void]$candidates.Add([System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PlaylistLocal, 'AutoHotkey')))
     }
-    foreach ($c in @(
-        'P:\all_scripts\AutoHotkey',
-        'D:\all_scripts\AutoHotkey'
-    )) {
-        [void]$candidates.Add($c)
+    # <scripts root>\AutoHotkey on any drive (ALL_SCRIPTS_ROOT / pointer / <X>:\all_scripts), then legacy P:.
+    $allScriptsResolver = Join-Path $PSScriptRoot 'Resolve-AllScriptsRoot.ps1'
+    if (Test-Path -LiteralPath $allScriptsResolver -PathType Leaf) {
+        . $allScriptsResolver
+        $ahk = Get-AllScriptsPath -RelativePath 'AutoHotkey' -StartPath $PlaylistLocal
+        if ($ahk) { [void]$candidates.Add($ahk) }
     }
+    [void]$candidates.Add('P:\all_scripts\AutoHotkey')
     $seen = @{}
     foreach ($c in $candidates) {
         if ([string]::IsNullOrWhiteSpace($c) -or $seen.ContainsKey($c)) { continue }
@@ -1326,7 +1328,7 @@ function Invoke-BatchPotPlayerDplGate {
         [switch] $DryRun,
         [switch] $Skip,
         [string] $PotPlayerExePath = '',
-        [string] $CompanionBinaryFolder = 'P:\all_scripts\AutoHotkey',
+        [string] $CompanionBinaryFolder = '',
         [switch] $SkipCompanionBinaries
     )
     if ($Skip) {

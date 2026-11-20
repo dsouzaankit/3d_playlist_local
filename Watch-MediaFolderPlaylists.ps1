@@ -26,7 +26,8 @@ param(
     [switch] $Once,
     [switch] $Foreground,
     [switch] $StartBackground,
-    [string] $PythonExe = 'P:\all_scripts\py_venv1\Scripts\python.exe'
+    # Default '' = <scripts root>\py_venv1\Scripts\python.exe (any drive).
+    [string] $PythonExe = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,7 +97,7 @@ function Start-MediaFolderPlaylistWatcher {
         [string] $MediaRoot,
         [string] $PlaylistLocal,
         [int] $PollSeconds = 60,
-        [string] $PythonExe = 'P:\all_scripts\py_venv1\Scripts\python.exe',
+        [string] $PythonExe = '',
         [string] $ShellExe = ''
     )
     if ([string]::IsNullOrWhiteSpace($WatcherScriptPath) -or -not (Test-Path -LiteralPath $WatcherScriptPath -PathType Leaf)) {
@@ -256,6 +257,18 @@ $scriptDir = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     [System.IO.Path]::GetFullPath($PSScriptRoot)
 } else {
     [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
+}
+
+if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+    $allScriptsResolver = Join-Path $scriptDir 'individual_transcode\Resolve-AllScriptsRoot.ps1'
+    if (Test-Path -LiteralPath $allScriptsResolver -PathType Leaf) {
+        . $allScriptsResolver
+        $PythonExe = Get-AllScriptsPath -RelativePath 'py_venv1\Scripts\python.exe' -StartPath $scriptDir
+    }
+    if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+        $pyCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+        $PythonExe = if ($null -ne $pyCmd) { $pyCmd.Source } else { 'python.exe' }
+    }
 }
 
 if ($StartBackground) {

@@ -1468,6 +1468,163 @@ function Clear-DlnaExportSegments {
     }
 }
 
+function Remove-DlnaWorkflowSegmentExports {
+    <#
+    .SYNOPSIS
+      Delete existing/old DLNA segment exports of ALL workflows (flat, fisheye, hybrid / as-is,
+      context-menu) under 3d_fullsbs_trans: 3d_op_*.mkv in flat\ fisheye\ hybrid\, including the
+      <sha256>.tmp / legacy _dlna_obf_* copies left by quit obfuscation (their map entries are dropped).
+      Leaves fisheye_temp\avs, logs and folder tree alone (use Clear-DlnaSegmentRootContents for a full wipe).
+      Used by Cleanup-DlnaSegmentExports.ps1 (playlist root).
+    .PARAMETER Root
+      One or more DLNA roots. Default: Ensure-DlnaSegmentRoot (M:\m1_media\3d_fullsbs_trans or remapped letter).
+    .PARAMETER IncludeFisheyeTemp
+      Also delete fisheye pass-1 mezzanine media under fisheye_temp\ (not avs\ or logs\).
+    .PARAMETER IncludeLegacyRoots
+      Also scan <any ready drive>:\{m1_media,f1_media,k1_media}\3d_fullsbs_trans (pre-subst layouts).
+    #>
+    param(
+        [string[]] $Root = @(),
+        [switch] $IncludeFisheyeTemp,
+        [switch] $IncludeLegacyRoots,
+        [switch] $DryRun,
+        [switch] $NoStopLeafExport,
+        [switch] $Quiet
+    )
+    $roots = [System.Collections.Generic.List[string]]::new()
+    $addRoot = {
+        param($r)
+        if ([string]::IsNullOrWhiteSpace($r)) { return }
+        try { $full = [System.IO.Path]::GetFullPath($r).TrimEnd('\') } catch { return }
+        foreach ($x in $roots) { if ($x -ieq $full) { return } }
+        [void]$roots.Add($full)
+    }
+    foreach ($r in @($Root)) { & $addRoot $r }
+    if ($roots.Count -eq 0) {
+        # The %AppData% store is the real folder behind the dummy M:\m1_media\3d_fullsbs_trans view.
+        # Use it directly: Ensure-DlnaSegmentRoot would subst M: and restore obfuscated media (side effects,
+        # even for -DryRun). Fall back to the live subst path only when the store is unknown.
+        $store = $null
+        try { $store = Get-DlnaSegmentRootAppDataFallback } catch { }
+        if ([string]::IsNullOrWhiteSpace($store) -or -not (Test-Path -LiteralPath $store -PathType Container)) {
+            $store = $script:DlnaSegmentRootPreferred
+        }
+        & $addRoot $store
+    }
+    if ($IncludeLegacyRoots.IsPresent) {
+        $parents = @($script:DlnaSegmentRootShareParent) + @($script:DlnaSegmentRootShareParentLegacyNames)
+        foreach ($d in @([System.IO.DriveInfo]::GetDrives())) {
+            try {
+                if (-not $d.IsReady) { continue }
+                foreach ($parent in $parents) {
+                    $cand = [System.IO.Path]::Combine($d.RootDirectory.FullName, $parent, '3d_fullsbs_trans')
+                    if (Test-Path -LiteralPath $cand -PathType Container) { & $addRoot $cand }
+                }
+            } catch { }
+        }
+    }
+
+    $stopped = 0
+    if (-not $NoStopLeafExport.IsPresent -and -not $DryRun.IsPresent) {
+        try { $stopped = [int](Stop-LeafFfmpegExport) } catch { $stopped = 0 }
+        try { $stopped += [int](Stop-DlnaStoreFfmpegProcesses) } catch { }
+    }
+
+    $deleted = 0
+    $truncated = 0
+    $failed = 0
+    $bytes = [long]0
+    $perRoot = [System.Collections.Generic.List[object]]::new()
+    foreach ($rootFull in $roots) {
+        if (-not (Test-Path -LiteralPath $rootFull -PathType Container)) {
+            if (-not $Quiet.IsPresent) { Write-Host "DLNA segment exports: root not found, skipped: $rootFull" }
+            continue
+        }
+        $map = Read-DlnaObfuscationMap -Root $rootFull
+        $mapDirty = $false
+        $targets = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+
+        foreach ($kind in @('flat', 'fisheye', 'hybrid')) {
+            $dir = Join-Path $rootFull $kind
+            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force -ErrorAction SilentlyContinue)) {
+                # Segment folders only ever hold 3d_op_* exports (clear or renamed in place on quit).
+                if (($f.Name -like '3d_op_*' -and (Test-DlnaMediaFileName -FileName $f.Name)) -or
+                    (Test-DlnaObfuscatedFileName -FileName $f.Name)) {
+                    [void]$targets.Add($f)
+                }
+            }
+        }
+
+        if ($IncludeFisheyeTemp.IsPresent) {
+            $ftDir = Join-Path $rootFull 'fisheye_temp'
+            if (Test-Path -LiteralPath $ftDir -PathType Container) {
+                foreach ($f in @(Get-ChildItem -LiteralPath $ftDir -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+                    $rel = Get-DlnaPathRelativeToRoot -Root $rootFull -FullPath $f.FullName
+                    if ($rel -match '(?i)(^|[\\/])(avs|logs)[\\/]' -or (Test-DlnaLogPath -FullPath $f.FullName)) { continue }
+                    $clearName = $f.Name
+                    if (Test-DlnaHashTmpFileName -FileName $f.Name) {
+                        $clearName = if ($map.ContainsKey($rel)) { [System.IO.Path]::GetFileName([string]$map[$rel]) } else { 'orphan.mkv' }
+                    } elseif (Test-DlnaLegacyObfuscatedFileName -FileName $f.Name) {
+                        $clearName = Get-DlnaLegacyUnobfuscatedLeafName -LeafName $f.Name
+                    }
+                    if ([System.IO.Path]::GetExtension($clearName) -ieq '.avs') { continue }
+                    if (Test-DlnaMediaFileName -FileName $clearName) { [void]$targets.Add($f) }
+                }
+            }
+        }
+
+        $rootDeleted = 0
+        $rootFailed = 0
+        foreach ($f in $targets) {
+            $len = [long]0
+            try { $len = [long]$f.Length } catch { }
+            if ($DryRun.IsPresent) {
+                if (-not $Quiet.IsPresent) { Write-Host ("  would delete {0} ({1:N1} MB)" -f $f.FullName, ($len / 1MB)) }
+                $action = 'dry-run'
+            } else {
+                $action = Clear-DlnaPathBestEffort -Path $f.FullName
+            }
+            switch ($action) {
+                { $_ -in @('deleted', 'dry-run') } { $deleted++; $rootDeleted++; $bytes += $len }
+                'truncated' { $truncated++; $rootDeleted++; $bytes += $len }
+                'failed' {
+                    $failed++; $rootFailed++
+                    Write-Warning ("DLNA segment export delete failed (in use?): {0}" -f $f.FullName)
+                }
+            }
+            if ($action -in @('deleted', 'truncated', 'dry-run', 'missing')) {
+                $rel = Get-DlnaPathRelativeToRoot -Root $rootFull -FullPath $f.FullName
+                if ($map.ContainsKey($rel)) {
+                    $map.Remove($rel)
+                    $mapDirty = $true
+                }
+            }
+        }
+        if ($mapDirty) {
+            Write-DlnaObfuscationMap -Root $rootFull -Map $map -DryRun:$DryRun.IsPresent
+        }
+        if (-not $DryRun.IsPresent) {
+            try { [void](Initialize-DlnaSegmentRootTree -Root $rootFull) } catch { }
+        }
+        [void]$perRoot.Add([pscustomobject]@{ Root = $rootFull; Deleted = $rootDeleted; Failed = $rootFailed })
+        if (-not $Quiet.IsPresent) {
+            $verb = if ($DryRun.IsPresent) { 'would delete' } else { 'deleted' }
+            Write-Host ("DLNA segment exports {0}: {1} file(s), failed={2} under {3}" -f $verb, $rootDeleted, $rootFailed, $rootFull)
+        }
+    }
+
+    return @{
+        Roots     = @($roots)
+        PerRoot   = @($perRoot)
+        Deleted   = $deleted
+        Truncated = $truncated
+        Failed    = $failed
+        Bytes     = $bytes
+        Stopped   = $stopped
+    }
+}
+
 function Sync-DlnaHybridSegmentHandoff {
     <#
     .SYNOPSIS

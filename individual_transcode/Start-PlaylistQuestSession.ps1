@@ -19,7 +19,7 @@
   ios_3d_loop_segments\windows\quest. Never fails the workflow: a missing repo / pwsh only prints a line.
 
   Off:   $env:PLAYLIST_QUEST_SESSION = '0'   (or questPlaylistSession=false in ios_3d_loop_segments\windows\loop-segments-windows.json)
-  Repo:  $env:LOOPSEGMENTS_IOS_REPO = '<path to ios_3d_loop_segments>'  (default P:\all_scripts\iOS apps\ios_3d_loop_segments)
+  Repo:  $env:LOOPSEGMENTS_IOS_REPO = '<path to ios_3d_loop_segments>'  (default <scripts root>\iOS apps\ios_3d_loop_segments)
   Log:   %TEMP%\loopsegments-quest-lantab.log  ("Playlist session:" / "Playlist stop:" lines)
 #>
 [CmdletBinding()]
@@ -38,7 +38,7 @@ try {
         Write-Host "Quest session: $starter missing - skipped."
         return
     }
-    $repo = @($env:LOOPSEGMENTS_IOS_REPO, 'P:\all_scripts\iOS apps\ios_3d_loop_segments') |
+    $repo = @($env:LOOPSEGMENTS_IOS_REPO, $(if ($env:ALL_SCRIPTS_ROOT) { Join-Path $env:ALL_SCRIPTS_ROOT 'iOS apps\ios_3d_loop_segments' }), 'P:\all_scripts\iOS apps\ios_3d_loop_segments') |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath (Join-Path $_ 'windows\quest\Watch-LoopSegmentsQuestLanTab.ps1') -PathType Leaf) } |
         Select-Object -First 1
     if (-not $repo) {

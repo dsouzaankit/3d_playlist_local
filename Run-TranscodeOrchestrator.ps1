@@ -28,7 +28,7 @@
   only (no DPL playtime usage in handover), then registry fallback.
 
   Session startup order (after mutex + at least one .avs):
-    A) Companion binaries: non-recursive *.exe in -CompanionBinaryFolder (default P:\all_scripts\AutoHotkey), name order,
+    A) Companion binaries: non-recursive *.exe in -CompanionBinaryFolder (default <scripts root>\AutoHotkey), name order,
        WorkingDirectory = that folder. They keep running through the PotPlayer gate and the whole transcode queue until finally.
     B) Inside try: load M3U paths, then PotPlayer DPL gate (below), then DPL/sidecar anchor + transcode loop.
 
@@ -79,7 +79,8 @@
   Full path to PotPlayer (e.g. ...\PotPlayerMini64.exe). If empty, Get-Command and Program Files DAUM\PotPlayer paths are tried.
 
 .PARAMETER CompanionBinaryFolder
-  Folder of companion *.exe files (default P:\all_scripts\AutoHotkey). Started after mutex + .avs check; each root process is
+  Folder of companion *.exe files (default <scripts root>\AutoHotkey, any drive; see
+  individual_transcode\Resolve-AllScriptsRoot.ps1). Started after mutex + .avs check; each root process is
   assigned to a Windows job (kill on job close) and finally also uses taskkill /T /F on each root PID. Not recursive; only *.exe
   in the folder root.
 
@@ -157,7 +158,7 @@ param(
     [switch] $DryRun,
     [switch] $SkipPotPlayer,
     [string] $PotPlayerExe = '',
-    [string] $CompanionBinaryFolder = 'P:\all_scripts\AutoHotkey',
+    [string] $CompanionBinaryFolder = '',
     [switch] $SkipCompanionBinaries,
     [switch] $Fisheye,
     [int] $BatchTimeoutSec = 5400,
@@ -1610,6 +1611,19 @@ if ($allAvs.Count -eq 0) {
     exit 0
 }
 
+if (-not $PSBoundParameters.ContainsKey('CompanionBinaryFolder') -or [string]::IsNullOrWhiteSpace($CompanionBinaryFolder)) {
+    # <scripts root>\AutoHotkey on any drive, else the synced copy beside this script.
+    $allScriptsResolver = Join-Path $orchestratorRoot 'individual_transcode\Resolve-AllScriptsRoot.ps1'
+    if (Test-Path -LiteralPath $allScriptsResolver -PathType Leaf) {
+        . $allScriptsResolver
+        $ahkCandidate = Get-AllScriptsPath -RelativePath 'AutoHotkey' -StartPath $orchestratorRoot
+        if ($ahkCandidate -and (Test-Path -LiteralPath $ahkCandidate -PathType Container)) { $CompanionBinaryFolder = $ahkCandidate }
+    }
+    if ([string]::IsNullOrWhiteSpace($CompanionBinaryFolder)) {
+        $ahkCandidate = Join-Path $orchestratorRoot 'AutoHotkey'
+        if (Test-Path -LiteralPath $ahkCandidate -PathType Container) { $CompanionBinaryFolder = $ahkCandidate }
+    }
+}
 $companionFolderResolved = if (-not [string]::IsNullOrWhiteSpace($CompanionBinaryFolder)) {
     [System.IO.Path]::GetFullPath($CompanionBinaryFolder)
 } else {

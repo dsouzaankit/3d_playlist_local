@@ -199,6 +199,9 @@ function Get-HybridWorkflowConfigCandidates {
         & $add (Join-Path $playlistLocal 'hybrid_workflow.json')
         & $add (Join-Path $PSScriptRoot 'hybrid_workflow.json')
     }
+    if (-not [string]::IsNullOrWhiteSpace($env:ALL_SCRIPTS_ROOT)) {
+        & $add ([System.IO.Path]::Combine($env:ALL_SCRIPTS_ROOT, '3d_playlist_local', 'hybrid_workflow.json'))
+    }
     & $add 'P:\all_scripts\3d_playlist_local\hybrid_workflow.json'
     return @($list)
 }

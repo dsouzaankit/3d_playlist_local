@@ -2,10 +2,10 @@
 # Invoke-PlaylistLocalQuestShutdown.ps1 (Quest control page Enter button), both in this folder.
 # The Quest helpers they drive stay in ios_3d_loop_segments\windows\quest (adb discovery, Quest
 # Browser DevTools, control page server, settings): found at $env:LOOPSEGMENTS_IOS_REPO, else
-# P:\all_scripts\iOS apps\ios_3d_loop_segments. Dot-sourcing this loads its settings lib.
+# <scripts root>\iOS apps\ios_3d_loop_segments (ALL_SCRIPTS_ROOT), then legacy P:. Dot-sourcing this loads its settings lib.
 
 function Find-PlaylistQuestRepo {
-    foreach ($r in @($env:LOOPSEGMENTS_IOS_REPO, 'P:\all_scripts\iOS apps\ios_3d_loop_segments')) {
+    foreach ($r in @($env:LOOPSEGMENTS_IOS_REPO, $(if ($env:ALL_SCRIPTS_ROOT) { Join-Path $env:ALL_SCRIPTS_ROOT 'iOS apps\ios_3d_loop_segments' }), 'P:\all_scripts\iOS apps\ios_3d_loop_segments')) {
         if ([string]::IsNullOrWhiteSpace($r)) { continue }
         if (Test-Path -LiteralPath (Join-Path $r 'windows\quest\Watch-LoopSegmentsQuestLanTab.ps1') -PathType Leaf) { return [System.IO.Path]::GetFullPath($r) }
     }

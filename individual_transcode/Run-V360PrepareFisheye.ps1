@@ -780,7 +780,7 @@ function Wait-FisheyeV360Launcher {
             if ($LauncherProc.ExitCode -ne 0) {
                 throw @(
                     "Pass 1 launcher failed (exit $($LauncherProc.ExitCode)): $FisheyeV360ScriptPath"
-                    'Ensure Run-FisheyeV360.ps1 beside prepare is synced from P:\all_scripts\3d_playlist_local.'
+                    'Ensure Run-FisheyeV360.ps1 beside prepare is synced from <scripts root>\3d_playlist_local.'
                 ) -join ' '
             }
             break
@@ -1536,11 +1536,11 @@ try {
         throw @(
             "Run-FisheyeV360.ps1 not found beside prepare script:",
             "  $(Join-Path $thisScriptDir 'Run-FisheyeV360.ps1')",
-            "  (sync individual_transcode from P:\all_scripts\3d_playlist_local)"
+            "  (sync individual_transcode from <scripts root>\3d_playlist_local)"
         ) -join [Environment]::NewLine
     }
     if (-not (Test-Path -LiteralPath $TemplatePath)) {
-        throw "Template not found: $TemplatePath (sync individual_transcode from P:\all_scripts\3d_playlist_local)"
+        throw "Template not found: $TemplatePath (sync individual_transcode from <scripts root>\3d_playlist_local)"
     }
 
     $mediaBase = [System.IO.Path]::GetFileNameWithoutExtension($mediaFull)
