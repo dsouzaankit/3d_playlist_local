@@ -172,7 +172,13 @@ Run sequence:
 #   link to the same page for the PC (optional, nothing opens there). Once the headset is awake and the page is open,
 #   SKYBOX VR Player is opened in front (quest\Start-PlaylistLocalQuestSkybox.ps1; app only - pick the segments from the
 #   SKYBOX PC share; SKYBOX not installed on the headset = logged, not launched; off: $env:PLAYLIST_QUEST_SKYBOX='0' or
-#   questPlaylistLaunchSkybox=false). Every quit (End session or natural end) first force-stops the Quest
+#   questPlaylistLaunchSkybox=false).
+#   Caveat: SKYBOX resets Global Settings > Passthrough on every launch (also after a normal quit, so not caused by
+#   the workflow's force-stop) - switch it on by hand each session. It cannot be preset: the setting is in SKYBOX's
+#   internal storage (app not debuggable, so no adb run-as/backup), and its menus take controller input, not adb taps.
+#   (Per-video passthrough IS persisted, in /sdcard/Android/data/xyz.skybox.player.ovr/files/SkyboxDataBase
+#   MediaCustomSettings "IsPassthrough", but that is a ChromaKey video effect, not the home environment.)
+#   Every quit (End session or natural end) first force-stops the Quest
 #   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
 #   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
 #   here; its End session button stops everything running: Quest players reading the output, Enter in every
