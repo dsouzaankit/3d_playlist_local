@@ -282,7 +282,10 @@ if (-not $ffmpegExe) { throw "ffmpeg not found: $Ffmpeg (Explorer PATH often omi
 $ffprobeExe = Get-FfprobeExePath $ffmpegExe
 
 $outDir = [System.IO.Path]::GetFullPath($OutputDirectory)
-New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+# Guard: New-Item -ItemType Directory on a drive root (e.g. L:\ for L:\clip.mp4) throws "path is not of a legal form".
+if (-not (Test-Path -LiteralPath $outDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+}
 $base = [System.IO.Path]::GetFileNameWithoutExtension($fullInput)
 if ($base.EndsWith('.mp4', [StringComparison]::OrdinalIgnoreCase)) {
     $base = [System.IO.Path]::GetFileNameWithoutExtension($base)
