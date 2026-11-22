@@ -78,6 +78,20 @@ try {
         }
         Write-Host "Quest control on this PC (optional): http://127.0.0.1:$port/pc?t=$tok"
     } catch {}
+    # XR player page (default Quest player; quest\Start-PlaylistLocalQuestXr.ps1 serves it).
+    try {
+        $player = ([string]$env:PLAYLIST_QUEST_PLAYER).Trim().ToLowerInvariant()
+        $xrPort = 18768
+        if (Test-Path -LiteralPath $cfgPath) {
+            $c2 = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+            if (-not $player -and $c2.PSObject.Properties['questPlaylistPlayer']) { $player = ([string]$c2.questPlaylistPlayer).Trim().ToLowerInvariant() }
+            if ($c2.PSObject.Properties['questPlaylistXrPort'] -and [int]$c2.questPlaylistXrPort -gt 0) { $xrPort = [int]$c2.questPlaylistXrPort }
+        }
+        if ($player -notin @('skybox', 'none')) {
+            $xrMode = if ($WorkflowName -in @('hybrid', 'fisheye', 'flat')) { $WorkflowName } else { 'hybrid' }
+            Write-Host "Quest XR page (opens on the headset; also on this PC): http://127.0.0.1:$xrPort/xr?mode=$xrMode"
+        }
+    } catch {}
 } catch {
     Write-Host "Quest session: not started ($($_.Exception.Message))."
 }

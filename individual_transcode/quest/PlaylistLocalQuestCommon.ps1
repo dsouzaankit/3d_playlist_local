@@ -126,8 +126,15 @@ function Get-PlaylistQuestHistoryUrl {
 
 function Get-PlaylistQuestExtraOrigins {
     $cfg = Get-LoopSegmentsWindowsSettings
-    if (-not ($cfg.Contains('questPlaylistHistoryOrigins') -and $null -ne $cfg.questPlaylistHistoryOrigins)) { return @() }
-    return @(@($cfg.questPlaylistHistoryOrigins) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+    $list = @()
+    if ($cfg.Contains('questPlaylistHistoryOrigins') -and $null -ne $cfg.questPlaylistHistoryOrigins) {
+        $list += @(@($cfg.questPlaylistHistoryOrigins) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
+    }
+    # The XR page (Start-PlaylistLocalQuestXr.ps1): its tabs are closed and its history deleted with the rest.
+    # {pc} = this PC's address on the route to the headset (worked out by the watcher).
+    $list += @("http://{pc}:$((Get-PlaylistXrSettings).Port)")
+    $list += @(Get-PlaylistXrSavedOrigins)
+    return @($list | Select-Object -Unique)
 }
 
 # Watcher arguments for the Quest step (tabs, history, sensor on; Wi-Fi off per questWifiOffOnExit),
@@ -181,4 +188,108 @@ function Register-PlaylistQuestSession {
     $entry = [pscustomobject]@{ pid = $WorkflowPid; name = $WorkflowName; started = (Get-PlaylistQuestProcessStart -ProcessId $WorkflowPid)
         registeredUtc = [DateTime]::UtcNow.ToString('o'); shutdownScript = (Join-Path $PSScriptRoot 'Invoke-PlaylistLocalQuestShutdown.ps1') }
     try { @{ sessions = @($keep + $entry) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:PlaylistSessionPath -Encoding utf8 } catch {}
+}
+
+# ---- adb (shared by Start-PlaylistLocalQuestSkybox.ps1 and Start-PlaylistLocalQuestXr.ps1) ----
+# Only reads `adb devices`: finding the headset (adb connect, mDNS, adb server restart) is left to the
+# keep-awake helper the session starts.
+
+function Find-PlaylistQuestAdb {
+    $want = [string](Get-LoopSegmentsWindowsSettings).questAdbExe
+    if (-not [string]::IsNullOrWhiteSpace($want) -and (Test-Path -LiteralPath $want)) { return $want }
+    $cmd = Get-Command -Name adb.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return [string]$cmd.Source }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe')
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\adb.exe')
+        (Join-Path $env:ProgramFiles 'Meta Quest Developer Hub\resources\bin\adb.exe')
+        'C:\platform-tools\adb.exe'
+    )
+    $pkgs = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (Test-Path -LiteralPath $pkgs) {
+        $candidates += @(Get-ChildItem -LiteralPath $pkgs -Directory -Filter 'Google.PlatformTools*' -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'platform-tools\adb.exe' })
+    }
+    foreach ($p in $candidates) { if ($p -and (Test-Path -LiteralPath $p)) { return $p } }
+    return $null
+}
+
+# adb <Arguments> with a timeout; { Code; Out; Err } (Code -1 = timed out). Needs $script:Adb.
+function Invoke-PlaylistQuestAdb {
+    param([string[]] $Arguments, [int] $TimeoutSec = 10)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $script:Adb
+    foreach ($a in $Arguments) { [void]$psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEndAsync()
+    $err = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+        try { $p.Kill($true) } catch {}
+        return [pscustomobject]@{ Code = -1; Out = ''; Err = 'timeout' }
+    }
+    return [pscustomobject]@{ Code = $p.ExitCode; Out = $out.Result; Err = $err.Result }
+}
+
+# Online headset serial (questAdbSerial when set, else the first device), or $null.
+function Get-PlaylistQuestSerial {
+    $r = Invoke-PlaylistQuestAdb -Arguments @('devices')
+    $serials = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^(\S+)\s+device\s*$' } | ForEach-Object { ($_ -split '\s+')[0] })
+    $want = ([string](Get-LoopSegmentsWindowsSettings).questAdbSerial).Trim()
+    if ($want) { return @($serials | Where-Object { $_ -eq $want } | Select-Object -First 1) }
+    return @($serials | Select-Object -First 1)
+}
+
+function Get-PlaylistQuestWakefulness {
+    param([string] $Serial)
+    $r = Invoke-PlaylistQuestAdb -Arguments @('-s', $Serial, 'shell', 'dumpsys', 'power') -TimeoutSec 8
+    if ($r.Code -eq 0 -and $r.Out -match 'mWakefulness=(\w+)') { return $Matches[1] }
+    return $null
+}
+
+# ---- Quest XR page (individual_transcode\xr, Start-PlaylistLocalQuestXr.ps1) ----
+
+# Which player the workflow start opens on the headset: 'xr' (default: the XR page in Quest Browser,
+# served from this PC), 'skybox' (SKYBOX VR Player app) or 'none'.
+# $env:PLAYLIST_QUEST_PLAYER, else questPlaylistPlayer in loop-segments-windows.json. The older
+# off switches still apply to SKYBOX: questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0.
+function Get-PlaylistQuestPlayer {
+    $raw = [string]$env:PLAYLIST_QUEST_PLAYER
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $cfg = Get-LoopSegmentsWindowsSettings
+        if ($cfg.Contains('questPlaylistPlayer') -and $cfg.questPlaylistPlayer) { $raw = [string]$cfg.questPlaylistPlayer }
+    }
+    $p = ([string]$raw).Trim().ToLowerInvariant()
+    if ($p -in @('xr', 'skybox', 'none')) { return $p }
+    return 'xr'
+}
+
+# Port (questPlaylistXrPort, default 18768 = control page 18766 + 2) and host mode
+# ($env:PLAYLIST_XR_HOST, else questPlaylistXrHost): 'auto' (default) = this PC's name when the headset
+# resolves it to this PC, else its LAN IPv4; 'ip' = always the IPv4; anything else = that host name.
+function Get-PlaylistXrSettings {
+    $cfg = Get-LoopSegmentsWindowsSettings
+    $port = 18768
+    try { if ($cfg.Contains('questPlaylistXrPort') -and [int]$cfg.questPlaylistXrPort -gt 0) { $port = [int]$cfg.questPlaylistXrPort } } catch {}
+    $hostMode = [string]$env:PLAYLIST_XR_HOST
+    if ([string]::IsNullOrWhiteSpace($hostMode) -and $cfg.Contains('questPlaylistXrHost')) { $hostMode = [string]$cfg.questPlaylistXrHost }
+    if ([string]::IsNullOrWhiteSpace($hostMode)) { $hostMode = 'auto' }
+    return [pscustomobject]@{ Port = $port; HostMode = $hostMode.Trim() }
+}
+
+# XR page origins opened on the headset (last 8): the quit closes their tabs and deletes their history.
+$script:PlaylistXrOriginsPath = Join-Path $env:TEMP 'playlist-xr-origins.json'
+
+function Get-PlaylistXrSavedOrigins {
+    try { return @((Get-Content -LiteralPath $script:PlaylistXrOriginsPath -Raw -ErrorAction Stop | ConvertFrom-Json).origins | Where-Object { $_ }) } catch { return @() }
+}
+
+function Add-PlaylistXrSavedOrigin {
+    param([string] $Origin)
+    if (-not $Origin) { return }
+    $list = @(@($Origin) + @(Get-PlaylistXrSavedOrigins | Where-Object { $_ -ne $Origin }) | Select-Object -First 8)
+    try { @{ origins = $list } | ConvertTo-Json | Set-Content -LiteralPath $script:PlaylistXrOriginsPath -Encoding utf8 } catch {}
 }

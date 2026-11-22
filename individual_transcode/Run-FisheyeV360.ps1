@@ -32,6 +32,9 @@ param(
     [int] $VideoBitrateMbps = 50,
     [double] $FisheyeSharpen = 0,
     [string] $OutputFile = '',
+    # Area around each fisheye circle: black (default) | green | red | blue. '' = $env:FISHEYE_BACKGROUND_COLOR, else black.
+    # Green / red / blue let a chroma-key player (Quest XR page) show passthrough there.
+    [string] $FisheyeBackgroundColor = '',
     [switch] $Background,
     [switch] $ClearOutputOnly,
     [switch] $DryRun
@@ -42,6 +45,8 @@ $leafFfmpegControlScript = Join-Path $PSScriptRoot 'Invoke-LeafFfmpegControl.ps1
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
     . $leafFfmpegControlScript
 }
+. (Join-Path $PSScriptRoot 'Resolve-FisheyeBackgroundColor.ps1')
+$fisheyeBg = Resolve-FisheyeBackgroundColor -Name $FisheyeBackgroundColor
 
 function Format-ProcessArgumentLine {
     param([string[]] $Arguments)
@@ -183,6 +188,7 @@ function Get-FisheyeFilterComplex {
         [double] $InputHFov, [double] $InputVFov,
         [double] $OutputHFov, [double] $OutputVFov,
         [string] $Interp = 'lanczos', [double] $SharpenAmount = 0, [string] $ScaleFlags = 'bicubic',
+        [string] $BackgroundColor = 'black',
         [switch] $FlatSource
     )
     if ($EyeSize -lt 256 -or ($EyeSize % 2) -ne 0) {
@@ -197,10 +203,10 @@ function Get-FisheyeFilterComplex {
     $flatChain = Get-FisheyeFlatPreV360Chain -EyeSize $EyeSize -PerEyeW $PerEyeW -PerEyeH $PerEyeH `
         -SharpenAmount $SharpenAmount -V360Filter $v360 -ScaleFlags $ScaleFlags
     if ($FlatSource) {
-        return "color=c=black:s=${EyeSize}x${EyeSize}[bg];" +
+        return "color=c=${BackgroundColor}:s=${EyeSize}x${EyeSize}[bg];" +
             "[0:v]${flatChain}[fg];[bg][fg]overlay=shortest=1,format=nv12[outv]"
     }
-    return "color=c=black:s=${EyeSize}x${EyeSize}[bgl];color=c=black:s=${EyeSize}x${EyeSize}[bgr];" +
+    return "color=c=${BackgroundColor}:s=${EyeSize}x${EyeSize}[bgl];color=c=${BackgroundColor}:s=${EyeSize}x${EyeSize}[bgr];" +
         "[0:v]crop=iw/2:ih:0:0[lflat];[0:v]crop=iw/2:ih:iw/2:0[rflat];" +
         "[lflat]${flatChain}[fgl];[bgl][fgl]overlay=shortest=1[lout];" +
         "[rflat]${flatChain}[fgr];[bgr][fgr]overlay=shortest=1[rout];" +
@@ -318,7 +324,7 @@ $filter = Get-FisheyeFilterComplex -EyeSize $settings.EyeSize `
     -InputHFov $settings.InputHFov -InputVFov $settings.InputVFov `
     -OutputHFov $settings.OutputHFov -OutputVFov $settings.OutputVFov `
     -Interp $FisheyeInterp -SharpenAmount $FisheyeSharpen -ScaleFlags $FisheyeScaleFlags `
-    -FlatSource:(-not $settings.IsSbs)
+    -BackgroundColor $fisheyeBg.Ffmpeg -FlatSource:(-not $settings.IsSbs)
 $sourceFpsRaw = Get-VideoFrameRateArg -MediaPath $fullInput -FfprobeExe $ffprobeExe
 $sourceFpsArg = ConvertTo-QsvSupportedFrameRateArg -FpsArg $sourceFpsRaw
 if ([string]::IsNullOrWhiteSpace($sourceFpsArg)) {
@@ -335,6 +341,7 @@ $fpsNote = if ($sourceFpsArg) { " fps=$sourceFpsArg" } else { '' }
 Write-Host ("Fisheye v360: {0} {1}x{2} -> eye {3}; mezzanine=av1_qsv preset={4} gq={5} VBR ~{6}M{7}; fragmented MP4; out {8}" -f `
     $layout, $settings.SbsWidth, $settings.SbsHeight, $settings.EyeSize, `
     $FisheyeQsvPreset, $GlobalQuality, $mbps, $fpsNote, $outFile)
+Write-Host ("Fisheye background: {0} ({1}, from {2})" -f $fisheyeBg.Name, $fisheyeBg.Css, $fisheyeBg.Source)
 
 $inv = [Globalization.CultureInfo]::InvariantCulture
 $ssFmt = $SsSec.ToString('0.######', $inv)

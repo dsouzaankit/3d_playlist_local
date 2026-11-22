@@ -170,10 +170,13 @@ Run sequence:
 #   individual_transcode\Start-PlaylistQuestSession.ps1 at start (not -DryRun): in the background it holds the
 #   Quest proximity sensor off and opens the Quest control page in Quest Browser; this window prints a sign-in
 #   link to the same page for the PC (optional, nothing opens there). Once the headset is awake and the page is open,
-#   SKYBOX VR Player is opened in front (quest\Start-PlaylistLocalQuestSkybox.ps1; app only - pick the segments from the
-#   SKYBOX PC share; SKYBOX not installed on the headset = logged, not launched; off: $env:PLAYLIST_QUEST_SKYBOX='0' or
-#   questPlaylistLaunchSkybox=false).
-#   Caveat: SKYBOX resets Global Settings > Passthrough on every launch (also after a normal quit, so not caused by
+#   the Quest player opens in front - questPlaylistPlayer (ios_3d_loop_segments\windows\loop-segments-windows.json) or
+#   $env:PLAYLIST_QUEST_PLAYER = xr (default) | skybox | none:
+#   xr: the XR player page (below), served from this PC and opened in Quest Browser next to the control page.
+#   skybox: SKYBOX VR Player is opened in front (quest\Start-PlaylistLocalQuestSkybox.ps1; app only - pick the segments
+#   from the SKYBOX PC share; SKYBOX not installed on the headset = logged, not launched; off: $env:PLAYLIST_QUEST_SKYBOX='0'
+#   or questPlaylistLaunchSkybox=false).
+#   Caveat (skybox): SKYBOX resets Global Settings > Passthrough on every launch (also after a normal quit, so not caused by
 #   the workflow's force-stop) - switch it on by hand each session. It cannot be preset: the setting is in SKYBOX's
 #   internal storage (app not debuggable, so no adb run-as/backup), and its menus take controller input, not adb taps.
 #   (Per-video passthrough IS persisted, in /sdcard/Android/data/xyz.skybox.player.ovr/files/SkyboxDataBase
@@ -193,6 +196,45 @@ Run sequence:
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
 #   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
+#
+# Quest XR page (individual_transcode\xr; ported from ios_3d_loop_segments ios/LoopSegments/Resources xr-player.html,
+#   xr-app.js, xr-components.js and the vendored A-Frame 1.6.0 aframe.min.js - do not upgrade it casually, see that repo's
+#   ios\README.md "A-Frame version"):
+#   Server: xr\serve_xr_page.py (stdlib Python; py_venv1) on port questPlaylistXrPort (default 18768), all interfaces,
+#     read-only, no login. Serves /xr, the A-Frame assets and the DLNA segments straight from the store
+#     %APPDATA%\3d_playlist_local\{hybrid,fisheye,flat}\3d_op_NN[_Suffix].mkv (HTTP Range; opened with full share flags
+#     so the quit rename and the wrap-2 rewrite still work while the headset streams). Stops when the workflow (and every
+#     other registered workflow) is gone. Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
+#     ("Playlist XR:"). By hand: quest\Start-PlaylistLocalQuestXr.ps1 -WorkflowPid <pid> -ServeOnly, or
+#     py -3 xr\serve_xr_page.py, then http://<pc>:18768/xr?mode=hybrid|fisheye|flat.
+#     First run: Windows Firewall asks to allow python.exe - allow it on private networks or the headset cannot connect.
+#   Page: playlists Hybrid / Fisheye / Flat = those folders, oldest segment first; Launch starts on the newest finished
+#     segment, and at each end it plays the next one written after it (waits while that slot is still being muxed).
+#     Projection Auto from the Skybox suffix: _LR_180_FISHEYE = fisheye 180 (equidistant circle per eye), _LR_180 = VR180
+#     half sphere, _Full_SBS / none = flat screen; the Projection picker overrides it. Enter AR = passthrough.
+#     Chroma keys the fisheye background (below). xr_debug.json keeps the page's debug ring (see the iOS repo's
+#     .cursor/skills/xr-debug).
+#   Push to the headset: quest\Start-PlaylistLocalQuestXr.ps1 (session step 4) waits for the control page open and an
+#     awake headset, then opens http://<host>:<port>/xr?mode=<workflow> with ios_3d_loop_segments'
+#     Watch-LoopSegmentsQuestLanTab.ps1 -Url <it> -NoLanLogin: control page tab, XR tab in front, then isSecureContext is
+#     read and, when false, the origin is added to Quest Browser chrome://flags #unsafely-treat-insecure-origin-as-secure
+#     and the browser restarts once (WebXR needs a secure context).
+#   Host (the flag lists exact origins, so a new DHCP address means one more flag add + browser restart):
+#     questPlaylistXrHost / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
+#     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;
+#     <name> = that name (e.g. a router DNS name). A name that then fails to load falls back to the IPv4 once.
+#     Most reliable static option: a DHCP reservation for this PC in the router (the IPv4 then never changes).
+#   Quit: the XR origins opened (%TEMP%\playlist-xr-origins.json) and http://{pc}:<port> are added to the control page's
+#     tab close + history delete. (A running Loop Segments companion does its own quit cleanup without them: add
+#     "http://{pc}:18768" to questPlaylistHistoryOrigins if you want them covered there too.)
+#
+# Fisheye background color (fisheye + hybrid workflows, Explorer v360 prepare too): the area around each eye's fisheye
+#   circle. run_batch_fisheye_v360.ps1 / run_batch_vr_hybrid.ps1 -FisheyeBackgroundColor black (default) | green | red | blue,
+#   or a persistent default: setx FISHEYE_BACKGROUND_COLOR green. The launcher exports FISHEYE_BACKGROUND_COLOR so every
+#   child uses it: Run-FisheyeV360.ps1 (pass-1 mezzanine) and Run-TranscodeFfmpeg.ps1 -Fisheye take -FisheyeBackgroundColor
+#   too (individual_transcode\Resolve-FisheyeBackgroundColor.ps1). Colors are pure (#00FF00 / #FF0000 / #0000FF; ffmpeg's
+#   own 'green' is #008000). The XR page turns Chroma on with that key color, so with Enter AR the room (passthrough) shows
+#   around the fisheye picture; black = Chroma off by default. Pick a color the video itself does not use much.
 #
 # Why different poll code paths: flat orchestrator never shared the fisheye batch wait loop. Orchestrator uses one
 # ReadKey for Space+Enter; fisheye batch uses Invoke-BatchConsoleControlPoll (Win32 Enter queue + ReadKey fallback).

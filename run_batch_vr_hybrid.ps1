@@ -19,6 +19,11 @@ param(
     [string] $CompanionBinaryFolder = '',
     [switch] $SkipCompanionBinaries,
     [switch] $SkipPotPlayerSeek,
+    # Area around each fisheye circle in fisheye segments: black (default) | green | red | blue.
+    # A key color lets the Quest XR page (chroma key, Enter AR) show passthrough there.
+    # '' = $env:FISHEYE_BACKGROUND_COLOR (setx for a persistent default), else black.
+    [ValidateSet('', 'black', 'green', 'red', 'blue')]
+    [string] $FisheyeBackgroundColor = '',
     [ValidateSet('Poll', 'Sync')]
     [string] $PrepareWaitMode = 'Poll',
     [int] $PrepareHeartbeatSec = 0,
@@ -36,6 +41,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 try { $PSNativeCommandUseErrorActionPreference = $false } catch { }
+# Children (prepare, v360 mezzanine, pass-2, Quest XR page) read the env var (Resolve-FisheyeBackgroundColor.ps1).
+if (-not [string]::IsNullOrWhiteSpace($FisheyeBackgroundColor)) { $env:FISHEYE_BACKGROUND_COLOR = $FisheyeBackgroundColor.ToLowerInvariant() }
+$fisheyeBgNote = if ([string]::IsNullOrWhiteSpace($env:FISHEYE_BACKGROUND_COLOR)) { 'black (default)' } else { $env:FISHEYE_BACKGROUND_COLOR }
+Write-Host "Fisheye background: $fisheyeBgNote (-FisheyeBackgroundColor black|green|red|blue)"
 
 $scriptDir = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     [System.IO.Path]::GetFullPath($PSScriptRoot)

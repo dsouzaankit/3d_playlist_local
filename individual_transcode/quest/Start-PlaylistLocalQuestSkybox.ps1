@@ -47,66 +47,15 @@ if ($env:PLAYLIST_QUEST_SKYBOX -eq '0' -or ($cfg.Contains('questPlaylistLaunchSk
     exit 0
 }
 
-function Find-PlaylistSkyboxAdb {
-    $want = [string]$cfg.questAdbExe
-    if (-not [string]::IsNullOrWhiteSpace($want) -and (Test-Path -LiteralPath $want)) { return $want }
-    $cmd = Get-Command -Name adb.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return [string]$cmd.Source }
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe')
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\adb.exe')
-        (Join-Path $env:ProgramFiles 'Meta Quest Developer Hub\resources\bin\adb.exe')
-        'C:\platform-tools\adb.exe'
-    )
-    $pkgs = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    if (Test-Path -LiteralPath $pkgs) {
-        $candidates += @(Get-ChildItem -LiteralPath $pkgs -Directory -Filter 'Google.PlatformTools*' -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'platform-tools\adb.exe' })
-    }
-    foreach ($p in $candidates) { if ($p -and (Test-Path -LiteralPath $p)) { return $p } }
-    return $null
-}
-
-$script:Adb = Find-PlaylistSkyboxAdb
+# adb helpers: PlaylistLocalQuestCommon.ps1 (shared with Start-PlaylistLocalQuestXr.ps1).
+$script:Adb = Find-PlaylistQuestAdb
 if (-not $script:Adb) {
     Write-PlaylistQuestLog 'Playlist Skybox: adb not found (set questAdbExe) - SKYBOX not launched.'
     exit 1
 }
-
-function Invoke-PlaylistSkyboxAdb {
-    param([string[]] $Arguments, [int] $TimeoutSec = 10)
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $script:Adb
-    foreach ($a in $Arguments) { [void]$psi.ArgumentList.Add($a) }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $out = $p.StandardOutput.ReadToEndAsync()
-    $err = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-        try { $p.Kill($true) } catch {}
-        return [pscustomobject]@{ Code = -1; Out = ''; Err = 'timeout' }
-    }
-    return [pscustomobject]@{ Code = $p.ExitCode; Out = $out.Result; Err = $err.Result }
-}
-
-# Online headset serial (questAdbSerial when set, else the first device).
-function Get-PlaylistSkyboxSerial {
-    $r = Invoke-PlaylistSkyboxAdb -Arguments @('devices')
-    $serials = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^(\S+)\s+device\s*$' } | ForEach-Object { ($_ -split '\s+')[0] })
-    $want = ([string]$cfg.questAdbSerial).Trim()
-    if ($want) { return @($serials | Where-Object { $_ -eq $want } | Select-Object -First 1) }
-    return @($serials | Select-Object -First 1)
-}
-
-function Get-PlaylistSkyboxWakefulness {
-    param([string] $Serial)
-    $r = Invoke-PlaylistSkyboxAdb -Arguments @('-s', $Serial, 'shell', 'dumpsys', 'power') -TimeoutSec 8
-    if ($r.Code -eq 0 -and $r.Out -match 'mWakefulness=(\w+)') { return $Matches[1] }
-    return $null
-}
+function Invoke-PlaylistSkyboxAdb { param([string[]] $Arguments, [int] $TimeoutSec = 10) Invoke-PlaylistQuestAdb -Arguments $Arguments -TimeoutSec $TimeoutSec }
+function Get-PlaylistSkyboxSerial { Get-PlaylistQuestSerial }
+function Get-PlaylistSkyboxWakefulness { param([string] $Serial) Get-PlaylistQuestWakefulness -Serial $Serial }
 
 function Test-PlaylistSkyboxInFront {
     param([string] $Serial)
