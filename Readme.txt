@@ -196,6 +196,13 @@ Run sequence:
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
 #   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
+#   adb hangs (adb devices / connect / even kill-server never return, PowerShell windows freeze with them; headset
+#   still on USB or listed by mDNS): the adb server is stuck (seen: two adb.exe running). The session's keep-awake
+#   helper (Loop Segments Watch-LoopSegmentsQuestLanTab.ps1) resets it by itself once `adb devices` times out (10 s):
+#   kills that adb.exe, starts a fresh server, reconnects; this repo's Quest scripts only read `adb devices` (10 s
+#   timeout) and pick the headset up again after that. By hand: taskkill /F /IM adb.exe, then adb mdns services and
+#   adb connect <ip:port> from its _adb-tls-connect line (the port changes on every reboot / wireless debugging
+#   toggle). See that README, "How the PC finds the headset" > adb server hung.
 #
 # Quest XR page (individual_transcode\xr; ported from ios_3d_loop_segments ios/LoopSegments/Resources xr-player.html,
 #   xr-app.js, xr-components.js and the vendored A-Frame 1.6.0 aframe.min.js - do not upgrade it casually, see that repo's
