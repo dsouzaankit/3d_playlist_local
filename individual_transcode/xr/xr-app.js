@@ -8,6 +8,7 @@
   var MODES = ["hybrid", "fisheye", "flat"];
   var MODE_LABELS = { hybrid: "Hybrid", fisheye: "Fisheye", flat: "Flat" };
   var PROJ_KEY = "playlistlocal.xr.projection.v1";
+  var AR_STEREO_KEY = "playlistlocal.xr.arStereo.v1";
   // A file written to within this long is still being muxed (segment_wrap 2 rewrites a slot in place).
   var GROWING_MS = 2500;
   var RATE_KEY = "loopsegments.lan.xrChromaRate.v1";
@@ -37,6 +38,7 @@
     flat: document.getElementById("xr-mode-flat")
   };
   var projSel = document.getElementById("xr-projection");
+  var arStereoEl = document.getElementById("xr-ar-stereo");
   var fileListEl = document.getElementById("xr-file-list");
   var refreshBtn = document.getElementById("xr-refresh-list");
   var reopenBtn = document.getElementById("xr-reopen");
@@ -785,6 +787,22 @@
       refreshSphereShader();
     };
   }
+  // 3D in AR: eye layers in Enter AR too (xr-components.js syncEyeLayers). Off = left half to both eyes.
+  function applyArStereo(on) {
+    window.__xrArStereo = !!on;
+    if (arStereoEl) arStereoEl.checked = !!on;
+    try { localStorage.setItem(AR_STEREO_KEY, on ? "1" : "0"); } catch (eS) {}
+    sphereEls().forEach(function (el) {
+      var comp = el.components && el.components["chroma-stereo-sbs"];
+      if (comp) try { comp.syncEyeLayers(); } catch (eL) {}
+    });
+  }
+  (function () {
+    var on = CFG.arStereo !== false;
+    try { var saved = localStorage.getItem(AR_STEREO_KEY); if (saved === "0" || saved === "1") on = saved === "1"; } catch (eR) {}
+    applyArStereo(on);
+  })();
+  if (arStereoEl) arStereoEl.onchange = function () { applyArStereo(arStereoEl.checked); };
   // Flat screen aspect is known only once the video's size is.
   video.addEventListener("loadedmetadata", function () {
     if (window.__xrProjection === "flat") applyProjection(activePlaylist()[index]);

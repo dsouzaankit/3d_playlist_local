@@ -224,9 +224,13 @@ Run sequence:
 #     segment, and at each end it plays the next one written after it (waits while that slot is still being muxed).
 #     Projection Auto from the Skybox suffix: _LR_180_FISHEYE = fisheye 180 (equidistant circle per eye), _LR_180 = VR180
 #     half sphere, _Full_SBS / none = flat screen; the Projection picker overrides it. Enter AR = passthrough.
-#     Enter AR is mono (the left half to both eyes, inherited from the iOS page); only Enter VR shows L/R 3D.
+#     Enter AR is 3D too (left dome on WebGL layer 1, right on layer 2, as in VR). The iOS page kept AR mono (its
+#     build 345: layers 1/2 blanked Quest AR video while it still edited the XR cameras by hand); that is gone since
+#     its eye-layer rewrite. "3D in AR" off on the page = the old mono AR (left half to both eyes).
 #     Checked on Quest 3 (2026-11-22): <COMPUTERNAME>.local resolves on the headset, the page is a secure context,
-#     AV1 + AAC .mkv plays at 1x (no dropped frames), Enter AR keys the green background, next segment loads in AR.
+#     AV1 + AAC .mkv plays at 1x (no dropped frames), Enter AR keys the green background with each eye on its own
+#     half, next segment loads in AR, VR right after AR shows video (xr-enabled-fixed at ticks 1), Chroma off and
+#     Fullscreen fine.
 #     Chroma keys the fisheye background (below). xr_debug.json keeps the page's debug ring (see the iOS repo's
 #     .cursor/skills/xr-debug).
 #   Push to the headset: quest\Start-PlaylistLocalQuestXr.ps1 (session step 4) waits for the control page open and an

@@ -1554,7 +1554,10 @@
       // layer 1 only on the left eye camera and layer 2 only on the right one, so each
       // eye draws its own dome. The XR cameras are never edited here; their defaults
       // are what makes this work, and nothing carries over from an AR session.
-      // AR, mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
+      // Mono and not-yet-presenting: layer 0, left dome only (left half, both eyes).
+      // AR: the iOS page kept AR mono (its build 345: eye layers 1/2 blanked Quest AR video while it
+      // still edited the XR cameras by hand; the 2026-11-05 rewrite stopped that). Here AR uses the
+      // eye layers too unless window.__xrArStereo === false ("3D in AR" off on the page).
       var mesh = this.el.getObject3D("mesh");
       var immersive = this.isImmersiveStereo();
       var desktop = this.isDesktopRole();
@@ -1564,7 +1567,8 @@
         var sceneEl = this.el.sceneEl;
         presenting = !!(sceneEl && sceneEl.renderer && sceneEl.renderer.xr && sceneEl.renderer.xr.isPresenting);
       } catch (e0) {}
-      var stereo = !desktop && immersive && presenting && !isAR && !!this.data.sbs;
+      var arStereo = window.__xrArStereo !== false;
+      var stereo = !desktop && immersive && presenting && (!isAR || arStereo) && !!this.data.sbs;
       var layerBit = stereo ? this.eyeLayer() : 0;
       if (mesh) {
         mesh.traverse(function (node) {
@@ -1593,10 +1597,10 @@
         show = immersive;
       }
       if (this.el.object3D) this.el.object3D.visible = show;
-      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0);
+      var sig = layerBit + "|" + (show ? 1 : 0) + "|" + (isAR ? 1 : 0) + "|" + (arStereo ? 1 : 0);
       if (!desktop && this._eyeLayerSig !== sig) {
         this._eyeLayerSig = sig;
-        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR }); } catch (eLog) {}
+        try { xrLog("eye-layers", { eye: this.data.eye, layer: layerBit, visible: show, ar: isAR, arStereo: arStereo }); } catch (eLog) {}
       }
     },
     bindMaterial: function (mat) {
