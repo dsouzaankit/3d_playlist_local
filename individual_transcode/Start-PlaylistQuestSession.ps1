@@ -20,6 +20,8 @@
 
   Off:   $env:PLAYLIST_QUEST_SESSION = '0'   (or questPlaylistSession=false in ios_3d_loop_segments\windows\loop-segments-windows.json)
   Repo:  $env:LOOPSEGMENTS_IOS_REPO = '<path to ios_3d_loop_segments>'  (default <scripts root>\iOS apps\ios_3d_loop_segments)
+         $env:QUEST_TOOLS_REPO = '<path to quest_tools>'  (generic headset layer: adb, sensor, Wi-Fi,
+         Quest Browser DevTools; default <scripts root>\quest_tools)
   Log:   %TEMP%\loopsegments-quest-lantab.log  ("Playlist session:" / "Playlist stop:" lines)
 #>
 [CmdletBinding()]
@@ -45,6 +47,18 @@ try {
         Write-Host 'Quest session: ios_3d_loop_segments not found (set LOOPSEGMENTS_IOS_REPO) - skipped.'
         return
     }
+    # The generic headset layer both repos load (same order as quest\PlaylistLocalQuestCommon.ps1).
+    $qtCandidates = @($env:QUEST_TOOLS_REPO, $(if ($env:ALL_SCRIPTS_ROOT) { Join-Path $env:ALL_SCRIPTS_ROOT 'quest_tools' }))
+    $d = $PSScriptRoot
+    while ($d) { $qtCandidates += (Join-Path $d 'quest_tools'); $d = Split-Path -Parent $d }
+    $questTools = @($qtCandidates + 'P:\all_scripts\quest_tools') |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath (Join-Path $_ 'QuestTools.ps1') -PathType Leaf) } |
+        Select-Object -First 1
+    if (-not $questTools) {
+        Write-Host 'Quest session: quest_tools not found (set QUEST_TOOLS_REPO) - skipped.'
+        return
+    }
+    $env:QUEST_TOOLS_REPO = [System.IO.Path]::GetFullPath($questTools)
     $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
     if (-not $pwsh) { $pwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe' }
     if (-not (Test-Path -LiteralPath $pwsh)) {
@@ -77,6 +91,20 @@ try {
             Set-Content -LiteralPath $tokPath -Value $tok -Encoding ascii -NoNewline
         }
         Write-Host "Quest control on this PC (optional): http://127.0.0.1:$port/pc?t=$tok"
+    } catch {}
+    # XR player page (default Quest player; quest\Start-PlaylistLocalQuestXr.ps1 serves it).
+    try {
+        $player = ([string]$env:PLAYLIST_QUEST_PLAYER).Trim().ToLowerInvariant()
+        $xrPort = 18768
+        if (Test-Path -LiteralPath $cfgPath) {
+            $c2 = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+            if (-not $player -and $c2.PSObject.Properties['questPlaylistPlayer']) { $player = ([string]$c2.questPlaylistPlayer).Trim().ToLowerInvariant() }
+            if ($c2.PSObject.Properties['questPlaylistXrPort'] -and [int]$c2.questPlaylistXrPort -gt 0) { $xrPort = [int]$c2.questPlaylistXrPort }
+        }
+        if ($player -notin @('skybox', 'none')) {
+            $xrMode = if ($WorkflowName -in @('hybrid', 'fisheye', 'flat')) { $WorkflowName } else { 'hybrid' }
+            Write-Host "Quest XR page (opens on the headset; also on this PC): http://127.0.0.1:$xrPort/xr?mode=$xrMode"
+        }
     } catch {}
 } catch {
     Write-Host "Quest session: not started ($($_.Exception.Message))."

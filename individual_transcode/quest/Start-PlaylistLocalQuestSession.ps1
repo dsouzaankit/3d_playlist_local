@@ -18,10 +18,18 @@
     3. Watch-LoopSegmentsQuestLanTab.ps1 -OpenControlPage: waits for an awake headset (every 5 s,
        until the workflow ends; questPlaylistOpenWaitMinutes > 0 caps it) and opens the control page
        in its own signed-in Quest Browser tab, where it also measures PC -> Quest;
-    4. Start-PlaylistLocalQuestSkybox.ps1 (this folder): once the headset is awake and the control
-       page open has finished, opens SKYBOX VR Player in front (Quest Browser keeps running
-       behind it) so the segments can be picked from the SKYBOX PC share. It only opens the app,
-       it does not start a video. questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0 skip it.
+    4. The player, per questPlaylistPlayer / $env:PLAYLIST_QUEST_PLAYER (PlaylistLocalQuestCommon.ps1
+       Get-PlaylistQuestPlayer):
+       xr (default) - Start-PlaylistLocalQuestXr.ps1 (this folder): serves the XR player page
+         (..\xr, the DLNA segments with fisheye / VR180 / flat projection and chroma key over
+         passthrough) from this PC and, once the control page open has finished and the headset is
+         awake, opens it in Quest Browser in front of the control page (adding its origin to
+         chrome://flags insecure-origin when needed).
+       skybox - Start-PlaylistLocalQuestSkybox.ps1 (this folder): opens SKYBOX VR Player in front
+         (Quest Browser keeps running behind it) so the segments can be picked from the SKYBOX PC
+         share. It only opens the app, it does not start a video. questPlaylistLaunchSkybox=false /
+         PLAYLIST_QUEST_SKYBOX=0 still skip it.
+       none - neither.
 
   Nothing opens on the PC; the workflow window prints a sign-in link to the page instead.
 
@@ -156,9 +164,23 @@ if (-not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $fals
     Write-PlaylistQuestLog ("Playlist session: opening the control page on the headset (PID {0}, waits {1} for it to be awake)." -f $p.Id, $(if ($wait -gt 0) { "up to $wait min" } else { 'until the workflow ends' }))
 }
 
-# 4. SKYBOX in front once the headset is awake (after the control page open), so the segments can
-#    be picked from the SKYBOX PC share. questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0 skip it.
-if ($env:PLAYLIST_QUEST_SKYBOX -ne '0' -and -not ($cfg.Contains('questPlaylistLaunchSkybox') -and $cfg.questPlaylistLaunchSkybox -eq $false)) {
+# 4. The player once the headset is awake (after the control page open): the XR page (default) or SKYBOX.
+$player = Get-PlaylistQuestPlayer
+if ($player -eq 'xr') {
+    $xrScript = Join-Path $PSScriptRoot 'Start-PlaylistLocalQuestXr.ps1'
+    $haveXr = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $c = [string]$_.CommandLine; $c -like '*Start-PlaylistLocalQuestXr.ps1*' -and $c -match "-WorkflowPid\s+$WorkflowPid\b" })
+    if ($haveXr.Count) {
+        Write-PlaylistQuestLog "Playlist session: XR page already queued for PID $WorkflowPid."
+    } else {
+        $argsXr = @('-WorkflowPid', "$WorkflowPid", '-WorkflowName', $WorkflowName)
+        if ($controlStatus) { $argsXr += @('-ControlPageStatusFile', $controlStatus) }
+        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $xrScript -Arguments $argsXr
+        Write-PlaylistQuestLog "Playlist session: XR page queued (PID $($p.Id)): served from this PC, opened in Quest Browser once the headset is awake."
+    }
+} elseif ($player -eq 'none') {
+    Write-PlaylistQuestLog 'Playlist session: no player opened (questPlaylistPlayer=none).'
+} elseif ($env:PLAYLIST_QUEST_SKYBOX -ne '0' -and -not ($cfg.Contains('questPlaylistLaunchSkybox') -and $cfg.questPlaylistLaunchSkybox -eq $false)) {
     $skyScript = Join-Path $PSScriptRoot 'Start-PlaylistLocalQuestSkybox.ps1'
     $haveSky = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $c = [string]$_.CommandLine; $c -like '*Start-PlaylistLocalQuestSkybox.ps1*' -and $c -match "-WorkflowPid\s+$WorkflowPid\b" })

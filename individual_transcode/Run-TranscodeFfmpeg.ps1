@@ -122,6 +122,11 @@
 .PARAMETER FisheyeSharpen
   Optional luma unsharp on each flat half before v360 (0 = off). Default off for speed; try 0.35 on soft sources.
 
+.PARAMETER FisheyeBackgroundColor
+  -Fisheye: area around each eye's fisheye circle. black (default) | green | red | blue (pure key colors for a
+  chroma-key player over passthrough, e.g. the Quest XR page). '' = $env:FISHEYE_BACKGROUND_COLOR, else black.
+  See Resolve-FisheyeBackgroundColor.ps1.
+
 .PARAMETER SegmentVideoBitrateMbps
   Flat / fisheye pass-2 segment encode CBR (av1_qsv). Default 0 = auto:
   LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS env, then the PC -> Quest LAN test the Quest control page
@@ -180,6 +185,7 @@ param(
     [ValidateSet('veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow')]
     [string] $FisheyeQsvPreset = 'fast',
     [double] $FisheyeSharpen = 0,
+    [string] $FisheyeBackgroundColor = '',
     [int] $SegmentVideoBitrateMbps = 0,
     [int] $SegmentVideoBitrateFallbackMbps = 0,
     [int] $OrchestratorPid = 0,
@@ -241,6 +247,7 @@ $leafFfmpegControlScript = Join-Path $thisScriptDir 'Invoke-LeafFfmpegControl.ps
 if (Test-Path -LiteralPath $leafFfmpegControlScript -PathType Leaf) {
     . $leafFfmpegControlScript
 }
+. (Join-Path $thisScriptDir 'Resolve-FisheyeBackgroundColor.ps1')
 $hybridRouteScript = Join-Path $thisScriptDir 'Resolve-HybridWorkflowRoute.ps1'
 if (Test-Path -LiteralPath $hybridRouteScript -PathType Leaf) {
     . $hybridRouteScript
@@ -416,7 +423,8 @@ function Get-FisheyeSbsFilterComplex {
         [double] $OutputVFov,
         [string] $Interp = 'cube',
         [double] $SharpenAmount = 0,
-        [string] $ScaleFlags = 'bicubic'
+        [string] $ScaleFlags = 'bicubic',
+        [string] $BackgroundColor = 'black'
     )
     if ($EyeSize -lt 256 -or ($EyeSize % 2) -ne 0) {
         throw "FisheyeEyeSize must be an even integer >= 256 (got $EyeSize)."
@@ -429,7 +437,7 @@ function Get-FisheyeSbsFilterComplex {
     $v360 = "v360=input=flat:output=fisheye:ih_fov=${ih}:iv_fov=${iv}:h_fov=${oh}:v_fov=${ov}:w=${EyeSize}:h=${EyeSize}:interp=${Interp}:alpha_mask=1,format=yuva420p"
     $flatChain = Get-FisheyeFlatPreV360Chain -EyeSize $EyeSize -PerEyeW $PerEyeW -PerEyeH $PerEyeH `
         -SharpenAmount $SharpenAmount -V360Filter $v360 -ScaleFlags $ScaleFlags
-    return "color=c=black:s=${EyeSize}x${EyeSize}[bgl];color=c=black:s=${EyeSize}x${EyeSize}[bgr];" +
+    return "color=c=${BackgroundColor}:s=${EyeSize}x${EyeSize}[bgl];color=c=${BackgroundColor}:s=${EyeSize}x${EyeSize}[bgr];" +
         "[0:v]crop=iw/2:ih:0:0[lflat];[0:v]crop=iw/2:ih:iw/2:0[rflat];" +
         "[lflat]${flatChain}[fgl];[bgl][fgl]overlay=shortest=1[lout];" +
         "[rflat]${flatChain}[fgr];[bgr][fgr]overlay=shortest=1[rout];" +
@@ -1438,6 +1446,7 @@ try {
         }
     }
     if ($useFisheyeSbs) {
+        $fisheyeBg = Resolve-FisheyeBackgroundColor -Name $FisheyeBackgroundColor
         $speedEyeCap = if ($FisheyeMaxEyeSize -ge 256) { $FisheyeMaxEyeSize } else { 0 }
         $fisheyeSettings = Resolve-FisheyeTranscodeSettings -AvsPath $fullInput -FfprobeExe $ffprobeExe `
             -RequestedEyeSize $FisheyeEyeSize -MaxEyeSize $speedEyeCap `
@@ -1447,7 +1456,9 @@ try {
             -PerEyeW $fisheyeSettings.PerEyeW -PerEyeH $fisheyeSettings.PerEyeH `
             -InputHFov $fisheyeSettings.InputHFov -InputVFov $fisheyeSettings.InputVFov `
             -OutputHFov $fisheyeSettings.OutputHFov -OutputVFov $fisheyeSettings.OutputVFov `
-            -Interp $FisheyeInterp -SharpenAmount $FisheyeSharpen -ScaleFlags $FisheyeScaleFlags
+            -Interp $FisheyeInterp -SharpenAmount $FisheyeSharpen -ScaleFlags $FisheyeScaleFlags `
+            -BackgroundColor $fisheyeBg.Ffmpeg
+        Write-Host ("Fisheye background: {0} ({1}, from {2})" -f $fisheyeBg.Name, $fisheyeBg.Css, $fisheyeBg.Source)
         if ($fisheyeSettings.SbsWidth -gt 0) {
             $preScaleNote = if ($fisheyeSettings.PerEyeW -gt $fisheyeSettings.EyeSize) {
                 "; pre-scale flat $($fisheyeSettings.PerEyeW)x$($fisheyeSettings.PerEyeH) before v360"
@@ -1820,6 +1831,9 @@ if ($null -ne $orchestratorFollowUp) {
         }
         if ($Fisheye.IsPresent) {
             $argList += '-Fisheye'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($FisheyeBackgroundColor)) {
+            $argList += @('-FisheyeBackgroundColor', $FisheyeBackgroundColor)
         }
         & $sh @argList
         $orchEc = $LASTEXITCODE
