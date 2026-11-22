@@ -3,6 +3,10 @@
 # The Quest helpers they drive stay in ios_3d_loop_segments\windows\quest (adb discovery, Quest
 # Browser DevTools, control page server, settings): found at $env:LOOPSEGMENTS_IOS_REPO, else
 # <scripts root>\iOS apps\ios_3d_loop_segments (ALL_SCRIPTS_ROOT), then legacy P:. Dot-sourcing this loads its settings lib.
+# The generic headset layer (adb, finding the headset, sensor, Wi-Fi, Quest Browser DevTools) is the
+# quest_tools repo, which Loop Segments' scripts load too: $env:QUEST_TOOLS_REPO, else
+# <scripts root>\quest_tools, else a quest_tools folder next to this repo. Dot-sourcing this loads it
+# (Find-QuestAdbExe, Invoke-Adb, Get-QuestWakefulness, Write-QuestLog, ...).
 
 function Find-PlaylistQuestRepo {
     foreach ($r in @($env:LOOPSEGMENTS_IOS_REPO, $(if ($env:ALL_SCRIPTS_ROOT) { Join-Path $env:ALL_SCRIPTS_ROOT 'iOS apps\ios_3d_loop_segments' }), 'P:\all_scripts\iOS apps\ios_3d_loop_segments')) {
@@ -19,6 +23,30 @@ $env:LOOPSEGMENTS_IOS_REPO = $script:LsRepo
 $script:LsWindowsDir = Join-Path $script:LsRepo 'windows'
 $script:LsQuestDir = Join-Path $script:LsWindowsDir 'quest'
 . (Join-Path $script:LsWindowsDir 'lib\LoopSegments-Windows.ps1')
+
+# Same order as Loop Segments' windows\quest\QuestToolsPath.ps1, so both use one checkout (shared
+# %TEMP% state, one adb server).
+function Find-PlaylistQuestToolsRepo {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($env:QUEST_TOOLS_REPO) { $candidates.Add($env:QUEST_TOOLS_REPO) }
+    if ($env:ALL_SCRIPTS_ROOT) { $candidates.Add((Join-Path $env:ALL_SCRIPTS_ROOT 'quest_tools')) }
+    $d = $PSScriptRoot
+    while ($d) { $candidates.Add((Join-Path $d 'quest_tools')); $d = Split-Path -Parent $d }
+    $candidates.Add('P:\all_scripts\quest_tools')
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath (Join-Path $c 'QuestTools.ps1') -PathType Leaf)) { return [System.IO.Path]::GetFullPath($c) }
+    }
+    return $null
+}
+
+$script:QuestToolsRepo = Find-PlaylistQuestToolsRepo
+if (-not $script:QuestToolsRepo) { throw 'quest_tools not found (set QUEST_TOOLS_REPO).' }
+$env:QUEST_TOOLS_REPO = $script:QuestToolsRepo
+. (Join-Path $script:QuestToolsRepo 'QuestTools.ps1')
+try {
+    $qtCfg = Get-LoopSegmentsWindowsSettings
+    Initialize-QuestTools -AdbExe ([string]$qtCfg.questAdbExe) -Serial ([string]$qtCfg.questAdbSerial)
+} catch {}
 
 $script:PlaylistQuestLog = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
 # Workflow shells registered at workflow start: { sessions: [ { pid, name, started, startedUtc } ] }.
@@ -191,63 +219,17 @@ function Register-PlaylistQuestSession {
 }
 
 # ---- adb (shared by Start-PlaylistLocalQuestSkybox.ps1 and Start-PlaylistLocalQuestXr.ps1) ----
-# Only reads `adb devices`: finding the headset (adb connect, mDNS, adb server restart) is left to the
-# keep-awake helper the session starts.
-
-function Find-PlaylistQuestAdb {
-    $want = [string](Get-LoopSegmentsWindowsSettings).questAdbExe
-    if (-not [string]::IsNullOrWhiteSpace($want) -and (Test-Path -LiteralPath $want)) { return $want }
-    $cmd = Get-Command -Name adb.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return [string]$cmd.Source }
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe')
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\adb.exe')
-        (Join-Path $env:ProgramFiles 'Meta Quest Developer Hub\resources\bin\adb.exe')
-        'C:\platform-tools\adb.exe'
-    )
-    $pkgs = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    if (Test-Path -LiteralPath $pkgs) {
-        $candidates += @(Get-ChildItem -LiteralPath $pkgs -Directory -Filter 'Google.PlatformTools*' -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'platform-tools\adb.exe' })
-    }
-    foreach ($p in $candidates) { if ($p -and (Test-Path -LiteralPath $p)) { return $p } }
-    return $null
-}
-
-# adb <Arguments> with a timeout; { Code; Out; Err } (Code -1 = timed out). Needs $script:Adb.
-function Invoke-PlaylistQuestAdb {
-    param([string[]] $Arguments, [int] $TimeoutSec = 10)
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $script:Adb
-    foreach ($a in $Arguments) { [void]$psi.ArgumentList.Add($a) }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $out = $p.StandardOutput.ReadToEndAsync()
-    $err = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-        try { $p.Kill($true) } catch {}
-        return [pscustomobject]@{ Code = -1; Out = ''; Err = 'timeout' }
-    }
-    return [pscustomobject]@{ Code = $p.ExitCode; Out = $out.Result; Err = $err.Result }
-}
+# quest_tools' Find-QuestAdbExe / Invoke-Adb / Get-QuestWakefulness ($script:Adb = Find-QuestAdbExe
+# first). Only reads `adb devices`: finding the headset (adb connect, mDNS, adb server restart) is left
+# to the keep-awake helper the session starts.
 
 # Online headset serial (questAdbSerial when set, else the first device), or $null.
 function Get-PlaylistQuestSerial {
-    $r = Invoke-PlaylistQuestAdb -Arguments @('devices')
+    $r = Invoke-Adb -Arguments @('devices')
     $serials = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^(\S+)\s+device\s*$' } | ForEach-Object { ($_ -split '\s+')[0] })
     $want = ([string](Get-LoopSegmentsWindowsSettings).questAdbSerial).Trim()
     if ($want) { return @($serials | Where-Object { $_ -eq $want } | Select-Object -First 1) }
     return @($serials | Select-Object -First 1)
-}
-
-function Get-PlaylistQuestWakefulness {
-    param([string] $Serial)
-    $r = Invoke-PlaylistQuestAdb -Arguments @('-s', $Serial, 'shell', 'dumpsys', 'power') -TimeoutSec 8
-    if ($r.Code -eq 0 -and $r.Out -match 'mWakefulness=(\w+)') { return $Matches[1] }
-    return $null
 }
 
 # ---- Quest XR page (individual_transcode\xr, Start-PlaylistLocalQuestXr.ps1) ----

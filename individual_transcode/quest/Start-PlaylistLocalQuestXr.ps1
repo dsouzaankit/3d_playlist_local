@@ -122,7 +122,7 @@ function Get-PlaylistXrPcAddress {
 # Windows Firewall drops ICMP echo by default.)
 function Test-PlaylistXrHeadsetResolves {
     param([string] $Serial, [string] $Name, [string] $Ip)
-    $r = Invoke-PlaylistQuestAdb -Arguments @('-s', $Serial, 'shell', 'ping', '-c', '1', '-W', '2', $Name) -TimeoutSec 10
+    $r = Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'ping', '-c', '1', '-W', '2', $Name) -TimeoutSec 10
     $text = [string]$r.Out + ' ' + [string]$r.Err
     if ($text -match 'PING\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3})\)') {
         $got = $Matches[1]
@@ -160,7 +160,7 @@ if (-not (Start-PlaylistXrServer)) { exit 3 }
 if ($ServeOnly) { exit 0 }
 
 # ---- 2. wait: control page open finished, headset awake ----
-$script:Adb = Find-PlaylistQuestAdb
+$script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-PlaylistQuestLog 'Playlist XR: adb not found (set questAdbExe) - page served, not opened on the headset.'
     exit 1
@@ -181,7 +181,7 @@ while ($true) {
             $settled = $w -in @('opened', 'failed', 'unreachable', 'cancelled')
         }
         $dev = Get-PlaylistQuestSerial
-        $state = if ($dev) { Get-PlaylistQuestWakefulness -Serial $dev } else { 'Unreachable' }
+        $state = if ($dev) { Get-QuestWakefulness -DeviceSerial $dev } else { 'Unreachable' }
         if (-not $state) { $state = 'Unknown' }
         $label = "headset $state$(if ($dev) { " ($dev)" })$(if (-not $settled) { ', control page still opening' })"
         if ($label -ne $lastState) { Write-PlaylistQuestLog "Playlist XR: $label"; $lastState = $label }

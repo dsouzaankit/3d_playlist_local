@@ -47,15 +47,15 @@ if ($env:PLAYLIST_QUEST_SKYBOX -eq '0' -or ($cfg.Contains('questPlaylistLaunchSk
     exit 0
 }
 
-# adb helpers: PlaylistLocalQuestCommon.ps1 (shared with Start-PlaylistLocalQuestXr.ps1).
-$script:Adb = Find-PlaylistQuestAdb
+# adb helpers: quest_tools (loaded by PlaylistLocalQuestCommon.ps1; shared with Start-PlaylistLocalQuestXr.ps1).
+$script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
     Write-PlaylistQuestLog 'Playlist Skybox: adb not found (set questAdbExe) - SKYBOX not launched.'
     exit 1
 }
-function Invoke-PlaylistSkyboxAdb { param([string[]] $Arguments, [int] $TimeoutSec = 10) Invoke-PlaylistQuestAdb -Arguments $Arguments -TimeoutSec $TimeoutSec }
+function Invoke-PlaylistSkyboxAdb { param([string[]] $Arguments, [int] $TimeoutSec = 10) Invoke-Adb -Arguments $Arguments -TimeoutSec $TimeoutSec }
 function Get-PlaylistSkyboxSerial { Get-PlaylistQuestSerial }
-function Get-PlaylistSkyboxWakefulness { param([string] $Serial) Get-PlaylistQuestWakefulness -Serial $Serial }
+function Get-PlaylistSkyboxWakefulness { param([string] $Serial) Get-QuestWakefulness -DeviceSerial $Serial }
 
 function Test-PlaylistSkyboxInFront {
     param([string] $Serial)
