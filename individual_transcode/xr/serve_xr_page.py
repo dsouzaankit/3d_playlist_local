@@ -133,6 +133,12 @@ class Server(ThreadingHTTPServer):
         self.debug_snapshot: dict = {}
         self.debug_lock = threading.Lock()
 
+    def server_bind(self):
+        # HTTPServer.server_bind calls socket.getfqdn(), which took ~6 s on this LAN (the launcher waits 10 s).
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
 
 class Handler(BaseHTTPRequestHandler):
     server: Server
