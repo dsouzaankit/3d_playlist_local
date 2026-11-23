@@ -214,7 +214,11 @@ Run sequence:
 #     read-only, no login. Serves /xr, the A-Frame assets and the DLNA segments straight from the store
 #     %APPDATA%\3d_playlist_local\{hybrid,fisheye,flat}\3d_op_NN[_Suffix].mkv (HTTP Range; opened with full share flags
 #     so the quit rename and the wrap-2 rewrite still work while the headset streams). Stops when the workflow (and every
-#     other registered workflow) is gone. Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
+#     other registered workflow) is gone. A finished segment is copied on first request to
+#     %TEMP%\playlist-xr-snapshots (newest 6 kept, cleared at start) and played from the copy: segment_wrap 2 at ~1x
+#     (flat: 20 s burst + 1.2x catch-up) truncates the watched slot before its last seconds play, which used to stall
+#     the page near the end of each minute with no advance. The page also advances after a 6 s stall within 8 s of the
+#     end (debug ring: stall-advance). Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
 #     ("Playlist XR:"). By hand: quest\Start-PlaylistLocalQuestXr.ps1 -WorkflowPid <pid> -ServeOnly, or
 #     py -3 xr\serve_xr_page.py, then http://<pc>:18768/xr?mode=hybrid|fisheye|flat.
 #     First run: Windows Firewall asks to allow python.exe - allow it on private networks or the headset cannot connect.

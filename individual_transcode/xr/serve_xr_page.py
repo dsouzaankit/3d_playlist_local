@@ -18,7 +18,10 @@ Routes
   /xr-assets/<js>        aframe.min.js, xr-components.js, xr-app.js
   /xr-assets/lsclean     tiny 404 page without login (Quest helper tab for chrome://flags / history)
   /xr_lists.json         {files: [{name: "hybrid/3d_op_00_LR_180.mkv", bytes, modified, modifiedMs, ageMs}]}
-  /media/<folder>/<file> the segment, with HTTP Range (seeking), no-store
+  /media/<folder>/<file> the segment, with HTTP Range (seeking), no-store. ?b=<bytes>&t=<mtime ms> (the
+                         page's playlist entry) names the version: a finished one is served from a private
+                         snapshot copy (see SNAP_DIR), since segment_wrap 2 truncates and rewrites that slot
+                         ~60 s after it closed - while the headset still streams its last seconds.
   /xr_debug.json         GET {lines, snapshot}; POST {lines, snapshot} appends; POST {"action":"clear"}
   /healthz               "ok"
 
@@ -56,6 +59,13 @@ STATE_PATH = os.path.join(TEMP, "playlist-xr-server.json")
 LOG_PATH = os.path.join(TEMP, "playlist-xr-server.log")
 SESSION_PATH = os.path.join(TEMP, "loopsegments-playlist-session.json")
 CHUNK = 1024 * 1024
+# Finished segments are copied here on first request and served from the copy. The muxer pacing is ~1x
+# (flat: plus a 20 s initial burst and 1.2x catch-up), so the slot being watched is reopened with truncate
+# before playback reaches its end: Range reads past the new size came back short, the <video> stalled in
+# its last seconds and never fired "ended" (no advance to the next segment).
+SNAP_DIR = os.path.join(TEMP, "playlist-xr-snapshots")
+SNAP_KEEP = 6               # newest copies kept (2 slots x 3 folders)
+GROWING_SEC = 2.5           # written within this long = still being muxed (xr-app.js GROWING_MS)
 
 
 def log(msg: str) -> None:
@@ -164,6 +174,8 @@ class Server(ThreadingHTTPServer):
         self.debug_lines: list[str] = []
         self.debug_snapshot: dict = {}
         self.debug_lock = threading.Lock()
+        self.snap_lock = threading.Lock()
+        self.snap_locks: dict[str, threading.Lock] = {}
 
     def server_bind(self):
         # HTTPServer.server_bind calls socket.getfqdn(), which took ~6 s on this LAN (the launcher waits 10 s).
@@ -265,7 +277,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._not_found(head_only)
                 return
             ext = os.path.splitext(full)[1].lower()
-            self._file(full, VIDEO_EXT[ext], head_only, ranged=True)
+            snap = self._snapshot(rel, full, parse_qs(parts.query))
+            self._file(snap or full, VIDEO_EXT[ext], head_only, ranged=True)
             return
         self._not_found(head_only)
 
@@ -283,6 +296,58 @@ class Handler(BaseHTTPRequestHandler):
         if os.path.dirname(full) != base or not os.path.isfile(full):
             return None
         return full
+
+    def _snapshot(self, rel: str, full: str, query: dict) -> str | None:
+        """Path of a private copy of the version the page asked for (?b=&t=), made on first request when
+        the live file is that version and finished. None = serve the live file (old URL without t, the
+        slot is still growing, or it was already rewritten before any copy was made)."""
+        try:
+            want_b = int((query.get("b") or [""])[0])
+            want_t = int((query.get("t") or [""])[0])
+        except ValueError:
+            return None
+        key = "%s_%d_%d" % (rel.replace("/", "__"), want_b, want_t)
+        dest = os.path.join(SNAP_DIR, key + os.path.splitext(full)[1].lower())
+        if os.path.isfile(dest):
+            touch(dest)
+            return dest
+        with self.server.snap_lock:
+            lock = self.server.snap_locks.setdefault(key, threading.Lock())
+        with lock:
+            if os.path.isfile(dest):
+                return dest
+            try:
+                st = os.stat(full)
+            except OSError:
+                return None
+            if st.st_size != want_b or int(st.st_mtime * 1000) != want_t or time.time() - st.st_mtime < GROWING_SEC:
+                return None
+            tmp = dest + ".part"
+            try:
+                os.makedirs(SNAP_DIR, exist_ok=True)
+                t0 = time.time()
+                with open_shared(full) as src, open(tmp, "wb") as out:
+                    while True:
+                        buf = src.read(8 * CHUNK)
+                        if not buf:
+                            break
+                        out.write(buf)
+                st2 = os.stat(full)
+                if (st2.st_size, st2.st_mtime_ns) != (st.st_size, st.st_mtime_ns) or os.path.getsize(tmp) != st.st_size:
+                    log("XR server: %s changed while copying - serving it live." % rel)
+                    os.remove(tmp)
+                    return None
+                os.replace(tmp, dest)
+                log("XR server: snapshot %s (%.1f MB, %.1f s)." % (rel, st.st_size / 1048576.0, time.time() - t0))
+            except OSError as ex:
+                log("XR server: snapshot %s failed (%s) - serving it live." % (rel, ex))
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return None
+        prune_snapshots(keep=dest)
+        return dest
 
     def _lists(self) -> dict:
         now = time.time()
@@ -394,6 +459,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
 
 
+def touch(path: str) -> None:
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def prune_snapshots(keep: str = "", limit: int = SNAP_KEEP) -> None:
+    """Keep the `limit` most recently used copies. A copy being streamed is opened with FILE_SHARE_DELETE,
+    so removing it only unlinks the name; the open reader finishes."""
+    try:
+        entries = [e for e in os.scandir(SNAP_DIR) if e.is_file() and (limit <= 0 or not e.name.endswith(".part"))]
+    except OSError:
+        return
+    entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+    for e in entries[limit:] if limit > 0 else entries:
+        if os.path.abspath(e.path) == os.path.abspath(keep):
+            continue
+        try:
+            os.remove(e.path)
+        except OSError:
+            pass
+
+
 def asset_build(opts) -> str:
     h = hashlib.sha1()
     for name in sorted(ASSETS | {"xr-player.html"}):
@@ -434,6 +523,7 @@ def main() -> int:
         log("XR server: quest_tools/xr (xr-components.js, aframe.min.js) not found - set QUEST_TOOLS_REPO or --engine-dir.")
         return 2
     opts.build = asset_build(opts)
+    prune_snapshots(limit=0)  # copies from an earlier run
     try:
         server = Server((opts.bind, opts.port), Handler, opts)
     except OSError as ex:
@@ -456,6 +546,7 @@ def main() -> int:
         pass
     finally:
         server.server_close()
+        prune_snapshots(limit=0)
         try:
             with open(STATE_PATH, "r", encoding="utf-8") as fh:
                 if json.load(fh).get("pid") == os.getpid():

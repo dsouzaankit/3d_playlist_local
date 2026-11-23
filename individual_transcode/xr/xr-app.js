@@ -560,6 +560,9 @@
     var q = [];
     if (entry.bytes) q.push("b=" + encodeURIComponent(String(entry.bytes)));
     if (entry.modified) q.push("m=" + encodeURIComponent(String(entry.modified)));
+    // b + t name this version: the server serves a finished one from a snapshot copy, so the wrap-2
+    // rewrite of the slot (~60 s after it closed) cannot cut off its last seconds mid-playback.
+    if (entry.modifiedMs) q.push("t=" + encodeURIComponent(String(entry.modifiedMs)));
     return q.length ? ("?" + q.join("&")) : "";
   }
   function entryFromFile(f) {
@@ -1012,6 +1015,33 @@
     if (!activePlaylist().length) return;
     advanceLive();
   });
+  // Safety net: a clip that stops progressing in its last seconds (slot rewritten before the server
+  // could snapshot it, short final cluster, audio/video tail mismatch) never fires "ended". Treat a
+  // 6 s stall within 8 s of the end as the end and move on.
+  (function stallWatchdog() {
+    var lastT = -1;
+    var lastMoveMs = Date.now();
+    setInterval(function () {
+      var now = Date.now();
+      var cur = Number(video.currentTime) || 0;
+      if (!wantPlay || video.paused || advancing || !video.src || seekDragging) {
+        lastT = cur;
+        lastMoveMs = now;
+        return;
+      }
+      if (Math.abs(cur - lastT) > 0.05) {
+        lastT = cur;
+        lastMoveMs = now;
+        return;
+      }
+      var dur = mediaDuration();
+      if (now - lastMoveMs >= 6000 && dur > 0 && dur - cur <= 8) {
+        try { xrLog("stall-advance", { t: cur, dur: dur, readyState: video.readyState, name: (activePlaylist()[index] || {}).name }); } catch (eL) {}
+        lastMoveMs = now;
+        if (activePlaylist().length) advanceLive();
+      }
+    }, 1000);
+  })();
   video.addEventListener("error", function () {
     var playlist = activePlaylist();
     var item = playlist[index];
