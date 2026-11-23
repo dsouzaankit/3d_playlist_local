@@ -218,7 +218,10 @@ Run sequence:
 #     %TEMP%\playlist-xr-snapshots (newest 6 kept, cleared at start) and played from the copy: segment_wrap 2 at ~1x
 #     (flat: 20 s burst + 1.2x catch-up) truncates the watched slot before its last seconds play, which used to stall
 #     the page near the end of each minute with no advance. The page also advances after a 6 s stall within 8 s of the
-#     end (debug ring: stall-advance). Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
+#     end (debug ring: stall-advance). Loop Segments never needed this: the iPhone writes each segment to
+#     op_NN.staging.mp4 (not listed) and swaps it into the slot only when complete, so a clip stays whole for ~120 s.
+#     The fix lives only here (serve_xr_page.py + xr-app.js), not in the shared quest_tools engine.
+#     Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
 #     ("Playlist XR:"). By hand: quest\Start-PlaylistLocalQuestXr.ps1 -WorkflowPid <pid> -ServeOnly, or
 #     py -3 xr\serve_xr_page.py, then http://<pc>:18768/xr?mode=hybrid|fisheye|flat.
 #     First run: Windows Firewall asks to allow python.exe - allow it on private networks or the headset cannot connect.
