@@ -268,7 +268,12 @@ Run sequence:
 #   child uses it: Run-FisheyeV360.ps1 (pass-1 mezzanine) and Run-TranscodeFfmpeg.ps1 -Fisheye take -FisheyeBackgroundColor
 #   too (individual_transcode\Resolve-FisheyeBackgroundColor.ps1). Colors are pure (#00FF00 / #FF0000 / #0000FF; ffmpeg's
 #   own 'green' is #008000). The XR page turns Chroma on with that key color, so with Enter AR the room (passthrough) shows
-#   around the fisheye picture; black = Chroma off by default. Pick a color the video itself does not use much.
+#   around the fisheye picture. Black turns Chroma on with key #000000, which the engine treats as a brightness
+#   (luma) key: pixels darker than ~15/255 go transparent, ~28/255 and up stay solid (quest_tools\xr\xr-components.js).
+#   Black is the default, so the XR page opens with Chroma on and key #000000 unless another color is set. Every page
+#   load sets Chroma + key from this setting (overriding the last picked key), for all clips (Hybrid / Fisheye / Flat),
+#   so dark scenes and letterbox bars show the room too; unticking Chroma lasts until the next reload.
+#   Pick a color the video itself does not use much.
 #
 # Why different poll code paths: flat orchestrator never shared the fisheye batch wait loop. Orchestrator uses one
 # ReadKey for Space+Enter; fisheye batch uses Invoke-BatchConsoleControlPoll (Win32 Enter queue + ReadKey fallback).

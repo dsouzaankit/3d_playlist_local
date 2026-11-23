@@ -261,7 +261,7 @@
   <div id="overlay" class="play-overlay">
     <h1>3D Playlist XR Player</h1>
     <p class="muted">The 3d_playlist_local DLNA segments on <code>{{XR_HOST_HTML}}</code>: <strong>Hybrid</strong> / <strong>Fisheye</strong> / <strong>Flat</strong> = <code>{{XR_MEDIA_ROOT_HTML}}</code><code>hybrid|fisheye|flat\3d_op_*.mkv</code>. Each 60 s slot plays in the order it was written, then the next one.</p>
-    <p class="warn">Quest WebXR needs a <strong>secure context</strong>: Quest Browser <code>chrome://flags</code> "Insecure origins treated as secure" must list <code>{{XR_ORIGIN_HTML}}</code> (the workflow's Quest push adds it). Passthrough = <strong>Enter AR</strong> (not Enter VR). Fisheye background: <strong>{{XR_BG_HTML}}</strong> - a key color turns <strong>Chroma</strong> on with that key, so the area around the fisheye circles shows the room.</p>
+    <p class="warn">Quest WebXR needs a <strong>secure context</strong>: Quest Browser <code>chrome://flags</code> "Insecure origins treated as secure" must list <code>{{XR_ORIGIN_HTML}}</code> (the workflow's Quest push adds it). Passthrough = <strong>Enter AR</strong> (not Enter VR). Fisheye background: <strong>{{XR_BG_HTML}}</strong> - <strong>Chroma</strong> starts on with that key, so the area around the fisheye circles shows the room. Key color black (#000000) is a brightness key: near-black pixels go transparent, so very dark scenes show the room too (untick Chroma to stop it).</p>
     <p id="xr-webxr-status" class="muted" style="font-size:0.85rem;max-width:36rem" role="status">Checking WebXR…</p>
     <div class="toolbar" role="group" aria-label="Playlist">
       <button type="button" id="xr-mode-hybrid" class="active">Hybrid</button>

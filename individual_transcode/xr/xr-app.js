@@ -828,13 +828,16 @@
     if (savedKey && /^#[0-9a-fA-F]{6}$/.test(savedKey)) applyChromaKey(savedKey);
   } catch (eKey) {}
   // Fisheye background (Resolve-FisheyeBackgroundColor.ps1): a key color means the area around the
-  // fisheye circles is meant to be keyed out -> Chroma on with that key. Black = Chroma off.
+  // fisheye circles is meant to be keyed out -> Chroma on with that key. Black = Chroma on with key
+  // #000000, which xr-components.js treats as a luma key (near-black pixels -> passthrough; very dark
+  // scene content shows the room too).
   (function applyBackgroundDefaults() {
     var bg = CFG.fisheyeBackground || {};
     var name = String(bg.name || "black");
     var css = String(bg.css || "");
-    if (chromaToggle) chromaToggle.checked = name !== "black";
-    if (name !== "black" && /^#[0-9a-fA-F]{6}$/.test(css)) applyChromaKey(css);
+    if (name === "black") css = "#000000";
+    if (chromaToggle) chromaToggle.checked = true;
+    if (/^#[0-9a-fA-F]{6}$/.test(css)) applyChromaKey(css);
     else syncShaderToggles();
   })();
   if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
