@@ -177,7 +177,15 @@ Run sequence:
 #   Every quit (End session or natural end) first closes the XR page's Quest Browser tabs
 #   (quest\Close-PlaylistLocalQuestXrTabs.ps1, from Invoke-DlnaWorkflowQuitCleanup before the rename, so it stops
 #   reading the segments), and after the workflow is gone
-#   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
+#   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off.
+#   "Natural end" = any exit of the workflow window: queue done (orchestrator "live playlist/disk queue empty"),
+#   batch timeout (124), Enter cancel (130) or an error - all reach finally. The headset step is the hidden
+#   Start-PlaylistLocalQuestSession.ps1 -CleanupWhenGone watcher: it polls every 3 s until the workflow PID and every
+#   other registered workflow are gone (so the 8 / 12 s close pause after an error delays it), skips it while the Loop
+#   Segments companion runs (its quit does it), and kills a cleanup still running after 180 s (log: "timed out").
+#   Hard kill of the console window: finally is skipped, so the XR tabs are not closed before the rename (and no DLNA
+#   quit cleanup, above), but the watcher only checks the PID, so the headset cleanup still runs.
+#   The control page's Space button = Space
 #   here; its End session button stops everything running: the XR page (its tabs closed), Enter in every
 #   3d_playlist_local window (an Enter that did not get through is retried every 5 s, up to 3 times; Enter again
 #   after 60 s; killed after ~3 min), then the Loop Segments companion
