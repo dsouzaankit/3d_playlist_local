@@ -130,7 +130,7 @@
 .PARAMETER SegmentVideoBitrateMbps
   Flat / fisheye pass-2 segment encode CBR (av1_qsv). Default 0 = auto:
   LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS env, then the PC -> Quest LAN test the Quest control page
-  runs at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json, 80% of measured, 5-100, under
+  runs at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json, 80% of measured, 5-80, under
   12 h old; Get-QuestLanSegmentBitrate.ps1), then -SegmentVideoBitrateFallbackMbps (the hybrid batch's
   own sidecar result), then lan_throughput / lan_recommended_segment_bitrate.json sidecars on
   L:\pcld_ios_media (from Measure-LoopSegmentsLanThroughput.ps1), else 30M. Resolved on every run, so a
@@ -1501,6 +1501,12 @@ try {
         ) + $segmentMuxerOutArgs + @($outPath)
     } else {
     $segmentMbps = Resolve-SegmentVideoBitrateMbps -ExplicitMbps $SegmentVideoBitrateMbps -FallbackMbps $SegmentVideoBitrateFallbackMbps
+    # av1_qsv CBR at ~100M pads frames to the budget but codes them at a much worse QP (blocky /
+    # "hazy" output); <=95M is fine. Cap every source (explicit, env, LAN test, sidecars) at 80M.
+    if ($segmentMbps -gt 80) {
+        Write-Host "DLNA segment bitrate: ${segmentMbps}M capped to 80M (av1_qsv CBR degrades near 100M)"
+        $segmentMbps = 80
+    }
     Write-Host "DLNA segment encode: ${segmentMbps}M CBR av1_qsv (flat / fisheye pass-2 path)"
     # Flat clips are one long ffmpeg run (fisheye pass-2 restarts every ~1 min anyway). Unless the
     # bitrate is pinned (-SegmentVideoBitrateMbps / LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS), a new

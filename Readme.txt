@@ -324,13 +324,16 @@ Run sequence:
 #   av1_qsv integer CFR (same as flat / fisheye): 24/25/30/50/60; NTSC 29.97 tagged 30 via AssumeFPS.
 #   Minute-segment encode bitrate (flat + fisheye pass-2): -SegmentVideoBitrateMbps, else
 #     LOOP_SEGMENTS_SEGMENT_VIDEO_BITRATE_MBPS, else the PC -> Quest LAN test the Quest control page runs on
-#     the headset at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json: 80% of measured, 5-100 Mbps,
+#     the headset at workflow start (%TEMP%\loopsegments-quest-lan-throughput.json: 80% of measured, 5-80 Mbps,
 #     under 12 h old; read by every encode: each ~1 min fisheye chase round; a running flat clip checks it every 5 s and
 #     restarts its ffmpeg at the next segment boundary when it moves >= 15% (same timestamp, next wrap slot, new -b:v) -
 #     so a test made after the start applies within ~1-2 min in both; the hybrid batch only pins a value you chose, otherwise it passes
 #     its sidecar result as -SegmentVideoBitrateFallbackMbps below the Quest result), else lan_recommended_segment_bitrate.json /
 #     scripts\lan_throughput.json from Measure-LoopSegmentsLanThroughput.ps1 (after rclone L: mount;
 #     default recommend = 80% of measured LAN Mbps). -SkipLanBitrateCap ignores sidecars (falls back to ~30M).
+#     Hard cap 80M on every source (explicit/env/LAN/sidecar): av1_qsv CBR at ~100M pads frames to the budget
+#     but codes them at a far worse QP -> blocky / "hazy" output (33 dB vs 42 dB at <=95M, 2560x720@24).
+#     Haze that comes and goes with the LAN test result is this, not rclone L: VFS caching (AVS decode is bit-exact).
 #   Per clip: if already-3D (Test-Skip3dFormattedMediaName) OR resolution above asisAboveReferencePx
 #     -> Run-SegmentCopyAsIs (-c copy -re) into ...\hybrid\ with asisSegmentSuffix (default LR_180).
 #     Config: hybrid_workflow.json (HYBRID_WORKFLOW_CONFIG, {media}\hybrid_workflow.json, or
