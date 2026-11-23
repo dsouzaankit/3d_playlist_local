@@ -152,33 +152,17 @@ function Get-PlaylistQuestHistoryUrl {
     return "http://127.0.0.1:$port/"
 }
 
-function Get-PlaylistQuestExtraOrigins {
-    $cfg = Get-LoopSegmentsWindowsSettings
-    $list = @()
-    if ($cfg.Contains('questPlaylistHistoryOrigins') -and $null -ne $cfg.questPlaylistHistoryOrigins) {
-        $list += @(@($cfg.questPlaylistHistoryOrigins) | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() })
-    }
-    # The XR page (Start-PlaylistLocalQuestXr.ps1): its tabs are closed and its history deleted with the rest.
-    # {pc} = this PC's address on the route to the headset (worked out by the watcher).
-    $list += @("http://{pc}:$((Get-PlaylistXrSettings).Port)")
-    $list += @(Get-PlaylistXrSavedOrigins)
-    # quest_tools' shared origin list (QuestOrigins.ps1): pages any project other than the Loop
-    # Segments companion opened on the headset. The companion's own pages (phone LAN page, control
-    # page) are left to its quit, which also reads this list.
-    $list += @(Get-QuestRegisteredOrigins -ExcludeOwner $script:PlaylistQuestCompanionOwners)
-    return @($list | Select-Object -Unique)
-}
-
 # Watcher arguments for the Quest step (tabs, history, sensor on; Wi-Fi off per questWifiOffOnExit),
 # with the same settings as the companion's quit: questCloseLanTabsOnExit / questClearHistoryOnExit.
+# No origins of its own: the watcher covers every page in quest_tools' shared origin list (the XR
+# page is registered when it opens) and questPlaylistHistoryOrigins from the config.
 function Get-PlaylistQuestHistoryArgs {
     $cfg = Get-LoopSegmentsWindowsSettings
+    Sync-PlaylistXrOriginsToShared
     $a = @('-Url', (Get-PlaylistQuestHistoryUrl), '-ClearHistory')
     if (-not ($cfg.Contains('questCloseLanTabsOnExit') -and $cfg.questCloseLanTabsOnExit -eq $false)) { $a += '-CloseLanTabs' }
     if ($cfg.Contains('questClearHistoryOnExit') -and $cfg.questClearHistoryOnExit -eq $false) { $a += '-SkipHistoryClear' }
     $a += '-EnableProximityAfter'
-    $extra = @(Get-PlaylistQuestExtraOrigins)
-    if ($extra.Count) { $a += '-ExtraOrigins'; $a += ($extra -join ',') }
     return $a
 }
 
@@ -266,22 +250,25 @@ function Get-PlaylistXrSettings {
     return [pscustomobject]@{ Port = $port; HostMode = $hostMode.Trim() }
 }
 
-# XR page origins opened on the headset (last 8): the quit closes their tabs and deletes their history.
-# Each one also goes into quest_tools' shared origin list under this owner, so the Loop Segments
-# companion's quit closes and deletes it too.
-$script:PlaylistXrOriginsPath = Join-Path $env:TEMP 'playlist-xr-origins.json'
+# XR page origins opened on the headset go into quest_tools' shared origin list under this owner;
+# every Quest cleanup (this repo's quit, End session, the Loop Segments companion's quit, the
+# after-quit helper) closes their tabs and deletes their history.
 $script:PlaylistXrOwner = '3d_playlist_local-xr'
-# Owners the Loop Segments watcher registers its own pages under (Watch-LoopSegmentsQuestLanTab.ps1).
-$script:PlaylistQuestCompanionOwners = @('loopsegments', 'loopsegments-control')
-
-function Get-PlaylistXrSavedOrigins {
-    try { return @((Get-Content -LiteralPath $script:PlaylistXrOriginsPath -Raw -ErrorAction Stop | ConvertFrom-Json).origins | Where-Object { $_ }) } catch { return @() }
-}
+# Older list (before the shared one; older 3d_playlist_local copies still write it): moved into the
+# shared list by Sync-PlaylistXrOriginsToShared.
+$script:PlaylistXrOriginsPath = Join-Path $env:TEMP 'playlist-xr-origins.json'
 
 function Add-PlaylistXrSavedOrigin {
     param([string] $Origin)
     if (-not $Origin) { return }
-    $list = @(@($Origin) + @(Get-PlaylistXrSavedOrigins | Where-Object { $_ -ne $Origin }) | Select-Object -First 8)
-    try { @{ origins = $list } | ConvertTo-Json | Set-Content -LiteralPath $script:PlaylistXrOriginsPath -Encoding utf8 } catch {}
     Register-QuestBrowserOrigin -Origin $Origin -Owner $script:PlaylistXrOwner
+}
+
+# XR origins an older copy saved in %TEMP%\playlist-xr-origins.json: register them, drop the file.
+function Sync-PlaylistXrOriginsToShared {
+    if (-not (Test-Path -LiteralPath $script:PlaylistXrOriginsPath)) { return }
+    $old = @()
+    try { $old = @((Get-Content -LiteralPath $script:PlaylistXrOriginsPath -Raw -ErrorAction Stop | ConvertFrom-Json).origins | Where-Object { $_ }) } catch {}
+    foreach ($o in $old) { Register-QuestBrowserOrigin -Origin ([string]$o) -Owner $script:PlaylistXrOwner }
+    Remove-Item -LiteralPath $script:PlaylistXrOriginsPath -Force -ErrorAction SilentlyContinue
 }

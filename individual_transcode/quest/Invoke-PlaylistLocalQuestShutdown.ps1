@@ -19,13 +19,11 @@
        cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
     3. (nothing opens on the PC any more: a control page tab you opened there closes itself);
     4. the companion (launcher shell or its Chromium running):
-       a. questPlaylistHistoryOrigins + the XR page: their tabs closed, then their history deleted
-          now (-ClearHistory -OnlyExtraOrigins -CloseLanTabs), while the headset is still on Wi-Fi:
-          the companion's quit does not know them;
-       b. close its Chromium gracefully (taskkill without /F: profile saved and synced), force after
+       a. close its Chromium gracefully (taskkill without /F: profile saved and synced), force after
           30 s: its normal quit runs (Quest tabs / history / SKYBOX / sensor / Wi-Fi off, rclone L:,
-          Keep Alive, iPhone Home: the Loop Segments app);
-       c. wait (<= 180 s) for its Quest step in the log ("Cleanup: finished") or the after-quit
+          Keep Alive, iPhone Home: the Loop Segments app). Its tab and history step covers every
+          page in quest_tools' shared origin list (the XR page included) and questPlaylistHistoryOrigins;
+       b. wait (<= 180 s) for its Quest step in the log ("Cleanup: finished") or the after-quit
           helper's pending file; neither (crashed, force-killed, no phone URL): step 5 runs instead;
     5. Quest step when the companion did not do it: -ClearHistory (tabs per questCloseLanTabsOnExit,
        history per questClearHistoryOnExit, sensor on, Wi-Fi off per questWifiOffOnExit), then
@@ -277,16 +275,11 @@ $companion = @(Get-PlaylistQuestCompanionProcesses)
 if (-not $companion.Count) {
     Set-ShutdownStep -Name 'Companion' -Result 'not running' -Level skip
 } else {
-    # a. Origins only this side knows, while the headset is still on Wi-Fi.
-    #    Their tabs (the XR page) are closed first, per questCloseLanTabsOnExit: the companion's quit
-    #    closes only its own tabs, and an XR tab left open kept its page in Quest history.
-    if (@(Get-PlaylistQuestExtraOrigins).Count) {
-        $xArgs = @('-Url', (Get-PlaylistQuestHistoryUrl), '-ClearHistory', '-OnlyExtraOrigins', '-ExtraOrigins', (@(Get-PlaylistQuestExtraOrigins) -join ','))
-        if (-not ($cfg.Contains('questCloseLanTabsOnExit') -and $cfg.questCloseLanTabsOnExit -eq $false)) { $xArgs += '-CloseLanTabs' }
-        $x = Invoke-ShutdownWatch -Arguments $xArgs -TimeoutSec 60
-        Set-ShutdownStep -Name 'Extra history origins' -Result $(switch ($x.Code) { 0 { 'deleted' } 1 { 'headset not on adb - left' } default { "failed (exit $($x.Code))" } }) -Level $(if ($x.Code -eq 0) { 'ok' } else { 'warn' })
-    }
-    # b. Graceful close of its Chromium -> its normal quit.
+    # The XR page and questPlaylistHistoryOrigins need no step of their own: the companion's quit
+    # cleans up every page in quest_tools' shared origin list (the XR page is registered when it
+    # opens) and the configured origins.
+    Sync-PlaylistXrOriginsToShared
+    # a. Graceful close of its Chromium -> its normal quit.
     Set-ShutdownStep -Name 'Companion' -Result 'closing its Chromium (its quit cleans up the Quest, L:, phone)...' -Level running
     $closeAt = Get-Date
     $chrome = @($companion | Where-Object { $_.Name -eq 'chrome.exe' })
@@ -304,7 +297,7 @@ if (-not $companion.Count) {
         # Launcher shell without Chromium (still starting, or Chromium already gone): stop the shell.
         foreach ($c in $companion) { try { & taskkill.exe /PID ([int]$c.ProcessId) 2>&1 | Out-Null } catch {} }
     }
-    # c. Its Quest step: "Cleanup: finished" in the log, or the after-quit helper's pending file.
+    # b. Its Quest step: "Cleanup: finished" in the log, or the after-quit helper's pending file.
     $deadline = (Get-Date).AddSeconds(180)
     while ((Get-Date) -lt $deadline) {
         if (@(Get-QuestLogSince -Since $closeAt | Where-Object { $_ -match ' Cleanup: finished ' }).Count) { $questDoneBy = 'companion'; break }

@@ -245,9 +245,9 @@ Run sequence:
 #     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;
 #     <name> = that name (e.g. a router DNS name). A name that then fails to load falls back to the IPv4 once.
 #     Most reliable static option: a DHCP reservation for this PC in the router (the IPv4 then never changes).
-#   Quit: the XR origins opened (%TEMP%\playlist-xr-origins.json) and http://{pc}:<port> are added to the control page's
-#     tab close + history delete. (A running Loop Segments companion does its own quit cleanup without them: add
-#     "http://{pc}:18768" to questPlaylistHistoryOrigins if you want them covered there too.)
+#   Quit: every XR origin opened is registered in quest_tools' shared origin list (%TEMP%\quest-browser-origins.json,
+#     owner 3d_playlist_local-xr), so every Quest cleanup - this workflow's quit, End session, a running Loop Segments
+#     companion's quit, the after-quit helper - closes its tabs and deletes its history.
 #
 # Fisheye background color (fisheye + hybrid workflows, Explorer v360 prepare too): the area around each eye's fisheye
 #   circle. run_batch_fisheye_v360.ps1 / run_batch_vr_hybrid.ps1 -FisheyeBackgroundColor black (default) | green | red | blue,
