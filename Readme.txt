@@ -228,7 +228,7 @@ Run sequence:
 #     half sphere, _Full_SBS / none = flat screen; the Projection picker overrides it. Enter AR = passthrough.
 #     Enter AR is 3D too (left dome on WebGL layer 1, right on layer 2, as in VR). The iOS page kept AR mono (its
 #     build 345: layers 1/2 blanked Quest AR video while it still edited the XR cameras by hand); that is gone since
-#     its eye-layer rewrite. "3D in AR" off on the page = the old mono AR (left half to both eyes).
+#     its eye-layer rewrite. (SBS 3D off = one picture to both eyes, in VR and AR.)
 #     Checked on Quest 3 (2026-11-22): <COMPUTERNAME>.local resolves on the headset, the page is a secure context,
 #     AV1 + AAC .mkv plays at 1x (no dropped frames), Enter AR keys the green background with each eye on its own
 #     half, next segment loads in AR, VR right after AR shows video (xr-enabled-fixed at ticks 1), Chroma off and
