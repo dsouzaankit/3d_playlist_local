@@ -1,7 +1,10 @@
 """Serve the Quest XR player page and the DLNA minute segments from this PC.
 
-Ported page: individual_transcode/xr/xr-player.html + xr-app.js + xr-components.js + aframe.min.js
-(from ios_3d_loop_segments, where the iPhone app served /xr). Here the media is the 3d_playlist_local
+Page: individual_transcode/xr/xr-player.html + xr-app.js (this project's playlists). Engine:
+xr-components.js + aframe.min.js from the shared quest_tools repo (quest_tools/xr, the one editable copy;
+--engine-dir, else $QUEST_TOOLS_REPO, <ALL_SCRIPTS_ROOT>/quest_tools, a quest_tools folder next to any
+parent of this folder, then P:/all_scripts/quest_tools). Ported from ios_3d_loop_segments, where the
+iPhone app serves /xr. Here the media is the 3d_playlist_local
 DLNA segment store (%APPDATA%\\3d_playlist_local\\{hybrid,fisheye,flat}\\3d_op_NN[_Suffix].mkv), the
 same files the subst M:\\m1_media\\3d_fullsbs_trans share shows to SKYBOX.
 
@@ -44,7 +47,9 @@ from urllib.parse import unquote, urlsplit, parse_qs
 HERE = os.path.dirname(os.path.abspath(__file__))
 FOLDERS = ("hybrid", "fisheye", "flat")
 VIDEO_EXT = {".mkv": "video/webm", ".webm": "video/webm", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mp4"}
-ASSETS = {"aframe.min.js", "xr-components.js", "xr-app.js"}
+PAGE_ASSETS = {"xr-app.js"}                          # this folder
+ENGINE_ASSETS = {"aframe.min.js", "xr-components.js"}  # quest_tools/xr
+ASSETS = PAGE_ASSETS | ENGINE_ASSETS
 BG_COLORS = {"black": "#000000", "green": "#00ff00", "red": "#ff0000", "blue": "#0000ff"}
 TEMP = os.environ.get("TEMP") or os.environ.get("TMP") or HERE
 STATE_PATH = os.path.join(TEMP, "playlist-xr-server.json")
@@ -115,6 +120,33 @@ def open_shared(path: str):
         raise OSError(ctypes.get_last_error(), "CreateFileW failed", path)
     fd = msvcrt.open_osfhandle(h, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     return os.fdopen(fd, "rb")
+
+
+def find_engine_dir(explicit: str = "") -> str | None:
+    """quest_tools/xr holding xr-components.js + aframe.min.js (same search order as the quest scripts)."""
+    cands = []
+    if explicit:
+        cands.append(explicit)
+    if os.environ.get("QUEST_TOOLS_REPO"):
+        cands.append(os.path.join(os.environ["QUEST_TOOLS_REPO"], "xr"))
+    if os.environ.get("ALL_SCRIPTS_ROOT"):
+        cands.append(os.path.join(os.environ["ALL_SCRIPTS_ROOT"], "quest_tools", "xr"))
+    d = HERE
+    while True:
+        cands.append(os.path.join(d, "quest_tools", "xr"))
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    cands.append(r"P:\all_scripts\quest_tools\xr")
+    for c in cands:
+        if all(os.path.isfile(os.path.join(c, n)) for n in ENGINE_ASSETS):
+            return os.path.abspath(c)
+    return None
+
+
+def asset_path(opts, name: str) -> str:
+    return os.path.join(opts.engine_dir if name in ENGINE_ASSETS else HERE, name)
 
 
 def default_root() -> str:
@@ -221,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/xr-assets/"):
             name = path[len("/xr-assets/"):]
             if name in ASSETS:
-                self._file(os.path.join(HERE, name), "text/javascript; charset=utf-8", head_only, cache="max-age=3600")
+                self._file(asset_path(self.server.opts, name), "text/javascript; charset=utf-8", head_only, cache="max-age=3600")
             else:
                 # lsclean and anything else: a small no-login page (it must land in Quest history).
                 self._not_found(head_only)
@@ -362,11 +394,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
 
 
-def asset_build() -> str:
+def asset_build(opts) -> str:
     h = hashlib.sha1()
     for name in sorted(ASSETS | {"xr-player.html"}):
         try:
-            st = os.stat(os.path.join(HERE, name))
+            st = os.stat(asset_path(opts, name))
             h.update(("%s:%d:%d;" % (name, st.st_size, int(st.st_mtime))).encode())
         except OSError:
             pass
@@ -394,9 +426,14 @@ def main() -> int:
                     help="fisheye background (default: FISHEYE_BACKGROUND_COLOR env, else black)")
     ap.add_argument("--default-mode", default="hybrid", choices=FOLDERS)
     ap.add_argument("--parent-pid", type=int, default=0, help="stop when this PID (and every registered workflow) is gone")
+    ap.add_argument("--engine-dir", default="", help="quest_tools/xr (default: found like the quest scripts find quest_tools)")
     opts = ap.parse_args()
     opts.root = os.path.abspath(opts.root or default_root())
-    opts.build = asset_build()
+    opts.engine_dir = find_engine_dir(opts.engine_dir)
+    if not opts.engine_dir:
+        log("XR server: quest_tools/xr (xr-components.js, aframe.min.js) not found - set QUEST_TOOLS_REPO or --engine-dir.")
+        return 2
+    opts.build = asset_build(opts)
     try:
         server = Server((opts.bind, opts.port), Handler, opts)
     except OSError as ex:
@@ -409,8 +446,8 @@ def main() -> int:
             json.dump(state, fh)
     except OSError:
         pass
-    log("XR server: listening on %s:%d, root %s (PID %d%s)." % (
-        opts.bind, opts.port, opts.root, os.getpid(), ", parent %d" % opts.parent_pid if opts.parent_pid else ""))
+    log("XR server: listening on %s:%d, root %s, engine %s (PID %d%s)." % (
+        opts.bind, opts.port, opts.root, opts.engine_dir, os.getpid(), ", parent %d" % opts.parent_pid if opts.parent_pid else ""))
     if opts.parent_pid > 0:
         threading.Thread(target=watch_parent, args=(server, opts.parent_pid), daemon=True).start()
     try:

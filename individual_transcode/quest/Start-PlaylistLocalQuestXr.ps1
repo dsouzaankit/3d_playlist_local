@@ -7,7 +7,8 @@
   Started hidden by Start-PlaylistLocalQuestSession.ps1 (step 4) when the Quest player is 'xr' (the
   default; questPlaylistPlayer / $env:PLAYLIST_QUEST_PLAYER = skybox | none switch it).
 
-    1. Serves ..\xr (serve_xr_page.py: xr-player.html, A-Frame, the DLNA segments in
+    1. Serves ..\xr (serve_xr_page.py: xr-player.html + xr-app.js; the engine xr-components.js and
+       A-Frame from quest_tools\xr; the DLNA segments in
        %APPDATA%\3d_playlist_local\{hybrid,fisheye,flat}) on port questPlaylistXrPort (18768), all
        interfaces, until the workflow (and any other registered workflow) ends. A server already
        answering on that port is reused.
@@ -89,7 +90,9 @@ function Start-PlaylistXrServer {
     if (-not $py) { Write-PlaylistQuestLog 'Playlist XR: no Python (py_venv1, py -3 or python) - XR page not served.'; return $false }
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $py.Exe
-    foreach ($a in @($py.Args) + @('-I', $serverScript, '--port', "$($xr.Port)", '--parent-pid', "$WorkflowPid", '--default-mode', $mode)) { [void]$psi.ArgumentList.Add([string]$a) }
+    # Engine (xr-components.js, A-Frame): quest_tools\xr, the same checkout the quest helpers loaded.
+    $engineArgs = @(); if ($script:QuestToolsRepo) { $engineArgs = @('--engine-dir', (Join-Path $script:QuestToolsRepo 'xr')) }
+    foreach ($a in @($py.Args) + @('-I', $serverScript, '--port', "$($xr.Port)", '--parent-pid', "$WorkflowPid", '--default-mode', $mode) + $engineArgs) { [void]$psi.ArgumentList.Add([string]$a) }
     $bg = ([string]$env:FISHEYE_BACKGROUND_COLOR).Trim().ToLowerInvariant()
     if ($bg -in @('black', 'green', 'red', 'blue')) { [void]$psi.ArgumentList.Add('--fisheye-bg'); [void]$psi.ArgumentList.Add($bg) }
     $psi.UseShellExecute = $false
