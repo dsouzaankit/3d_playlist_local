@@ -94,6 +94,9 @@
     hex = hex.toLowerCase();
     if (chromaKeyEl) chromaKeyEl.value = hex;
     if (chromaKeyPlayEl) chromaKeyPlayEl.value = hex;
+    Array.prototype.forEach.call(document.querySelectorAll(".xr-key-swatches button"), function (b) {
+      b.classList.toggle("active", (b.getAttribute("data-key") || "").toLowerCase() === hex);
+    });
     try { localStorage.setItem(KEY_KEY, hex); } catch (e) {}
     syncShaderToggles();
     refreshSphereShader();
@@ -823,6 +826,9 @@
   if (chromaToggle) chromaToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
   if (chromaKeyEl) chromaKeyEl.oninput = function () { applyChromaKey(chromaKeyEl.value); };
   if (chromaKeyPlayEl) chromaKeyPlayEl.oninput = function () { applyChromaKey(chromaKeyPlayEl.value); };
+  Array.prototype.forEach.call(document.querySelectorAll(".xr-key-swatches button"), function (b) {
+    b.onclick = function () { applyChromaKey(b.getAttribute("data-key")); };
+  });
   try {
     var savedKey = localStorage.getItem(KEY_KEY);
     if (savedKey && /^#[0-9a-fA-F]{6}$/.test(savedKey)) applyChromaKey(savedKey);

@@ -274,6 +274,9 @@ Run sequence:
 #   load sets Chroma + key from this setting (overriding the last picked key), for all clips (Hybrid / Fisheye / Flat),
 #   so dark scenes and letterbox bars show the room too; unticking Chroma lasts until the next reload.
 #   Pick a color the video itself does not use much.
+#   To change the key on the page, use the Black / Green / Blue / Red swatches next to either Key picker (launch page
+#   and playback bar). Quest Browser's own color dialog can't leave #000000: its hue/saturation sliders do nothing at
+#   brightness 0, so its preview and Set button stay black.
 #
 # Why different poll code paths: flat orchestrator never shared the fisheye batch wait loop. Orchestrator uses one
 # ReadKey for Space+Enter; fisheye batch uses Invoke-BatchConsoleControlPoll (Win32 Enter queue + ReadKey fallback).
