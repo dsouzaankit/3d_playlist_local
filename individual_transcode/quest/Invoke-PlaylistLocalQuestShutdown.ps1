@@ -12,8 +12,8 @@
 
     0. stop the workflows' keep-awake, a pending page open and the natural-end cleanup helper
        (this run does that cleanup);
-    1. Quest media apps (-StopMediaApps): apps connected to this PC + questPlaylistMediaPlayers,
-       first, so nothing streams the segments while the workflows' quit renames them;
+    1. the XR page (Close-PlaylistLocalQuestXrTabs.ps1): its Quest Browser tabs closed first, so
+       nothing streams the segments while the workflows' quit renames them;
     2. 3d_playlist_local workflows: Enter in every workflow window (key helper allowed 45 s; not
        delivered = tried again every 5 s, up to 3 times), wait for each to exit (its own quit
        cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
@@ -91,12 +91,12 @@ function Set-ShutdownStep {
     if ($Level -ne 'running') { Write-PlaylistQuestLog "Playlist stop: $Name - $Result" }
 }
 
-# Runs the watcher hidden and waits. Returns @{ Code; Status } (Code -1 = timed out).
+# Runs the watcher (or -Script) hidden and waits. Returns @{ Code; Status } (Code -1 = timed out).
 function Invoke-ShutdownWatch {
-    param([string[]] $Arguments, [int] $TimeoutSec = 60)
+    param([string[]] $Arguments = @(), [int] $TimeoutSec = 60, [string] $Script = $watch)
     $statusFile = Join-Path $env:TEMP ('loopsegments-playlist-stop-{0}.txt' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
-        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments (@($Arguments) + @('-StatusFile', $statusFile))
+        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $Script -Arguments (@($Arguments) + @('-StatusFile', $statusFile))
         Set-HelperPriority $p
         if (-not $p.WaitForExit($TimeoutSec * 1000)) {
             try { $p.Kill($true) } catch {}
@@ -205,14 +205,14 @@ foreach ($id in $pids) {
     }
 }
 
-# 1. Quest apps reading the segments + configured players.
-Set-ShutdownStep -Name 'Quest media apps' -Result 'stopping...' -Level running
-$r = Invoke-ShutdownWatch -Arguments @('-StopMediaApps') -TimeoutSec 60
+# 1. The XR page: its tabs closed, so nothing streams the segments while the workflows' quit renames them.
+Set-ShutdownStep -Name 'XR page' -Result 'closing...' -Level running
+$r = Invoke-ShutdownWatch -Script (Join-Path $PSScriptRoot 'Close-PlaylistLocalQuestXrTabs.ps1') -TimeoutSec 60
 switch ($r.Code) {
-    0 { Set-ShutdownStep -Name 'Quest media apps' -Result $(if ($r.Status) { $r.Status } else { 'done' }) }
-    1 { Set-ShutdownStep -Name 'Quest media apps' -Result 'headset not on adb - skipped' -Level warn }
-    -1 { Set-ShutdownStep -Name 'Quest media apps' -Result 'timed out' -Level bad }
-    default { Set-ShutdownStep -Name 'Quest media apps' -Result ("failed (exit {0}){1}" -f $r.Code, $(if ($r.Status) { ": $($r.Status)" } else { '' })) -Level bad }
+    0 { Set-ShutdownStep -Name 'XR page' -Result $(if ($r.Status) { $r.Status } else { 'done' }) }
+    1 { Set-ShutdownStep -Name 'XR page' -Result 'headset not on adb - skipped' -Level warn }
+    -1 { Set-ShutdownStep -Name 'XR page' -Result 'timed out' -Level bad }
+    default { Set-ShutdownStep -Name 'XR page' -Result ("failed (exit {0}){1}" -f $r.Code, $(if ($r.Status) { ": $($r.Status)" } else { '' })) -Level bad }
 }
 
 # 2. Workflows: Enter, then wait for each window to exit (it runs its own quit cleanup).

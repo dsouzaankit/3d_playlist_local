@@ -4,8 +4,9 @@
   (instead of SKYBOX), next to the Quest control page.
 
 .DESCRIPTION
-  Started hidden by Start-PlaylistLocalQuestSession.ps1 (step 4) when the Quest player is 'xr' (the
-  default; questPlaylistPlayer / $env:PLAYLIST_QUEST_PLAYER = skybox | none switch it).
+  Started hidden by Start-PlaylistLocalQuestSession.ps1 (step 4) unless questPlaylistPlayer /
+  $env:PLAYLIST_QUEST_PLAYER = none. Before the workflow's quit renames the segments,
+  Close-PlaylistLocalQuestXrTabs.ps1 closes its tabs.
 
     1. Serves ..\xr (serve_xr_page.py: xr-player.html + xr-app.js; the engine xr-components.js and
        A-Frame from quest_tools\xr; the DLNA segments in

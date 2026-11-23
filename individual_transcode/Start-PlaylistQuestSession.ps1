@@ -66,9 +66,9 @@ try {
         return
     }
     $env:LOOPSEGMENTS_IOS_REPO = $repo
-    # Invoke-LeafFfmpegControl.ps1 quit cleanup stops the Quest players first (this process only).
+    # Invoke-LeafFfmpegControl.ps1 quit cleanup closes the XR page first (this process only).
     $env:PLAYLIST_QUEST_SESSION_PID = [string]$WorkflowPid
-    Remove-Item Env:PLAYLIST_QUEST_PLAYERS_STOPPED -ErrorAction SilentlyContinue
+    Remove-Item Env:PLAYLIST_QUEST_XR_CLOSED -ErrorAction SilentlyContinue
     $argLine = '-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}" -WorkflowPid {1} -WorkflowName "{2}"' -f $starter, $WorkflowPid, ($WorkflowName -replace '"', '')
     Start-Process -FilePath $pwsh -ArgumentList $argLine -WindowStyle Hidden | Out-Null
     Write-Host 'Quest session: sensor off + Quest control page on the headset (background). Its End session button stops this window and cleans up the Quest.'
@@ -101,7 +101,7 @@ try {
             if (-not $player -and $c2.PSObject.Properties['questPlaylistPlayer']) { $player = ([string]$c2.questPlaylistPlayer).Trim().ToLowerInvariant() }
             if ($c2.PSObject.Properties['questPlaylistXrPort'] -and [int]$c2.questPlaylistXrPort -gt 0) { $xrPort = [int]$c2.questPlaylistXrPort }
         }
-        if ($player -notin @('skybox', 'none')) {
+        if ($player -ne 'none') {
             $xrMode = if ($WorkflowName -in @('hybrid', 'fisheye', 'flat')) { $WorkflowName } else { 'hybrid' }
             Write-Host "Quest XR page (opens on the headset; also on this PC): http://127.0.0.1:$xrPort/xr?mode=$xrMode"
         }

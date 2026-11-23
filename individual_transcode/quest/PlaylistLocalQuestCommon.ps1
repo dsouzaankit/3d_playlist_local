@@ -206,7 +206,7 @@ function Register-PlaylistQuestSession {
     try { @{ sessions = @($keep + $entry) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:PlaylistSessionPath -Encoding utf8 } catch {}
 }
 
-# ---- adb (shared by Start-PlaylistLocalQuestSkybox.ps1 and Start-PlaylistLocalQuestXr.ps1) ----
+# ---- adb (Start-PlaylistLocalQuestXr.ps1, Close-PlaylistLocalQuestXrTabs.ps1) ----
 # quest_tools' Find-QuestAdbExe / Invoke-Adb / Get-QuestWakefulness ($script:Adb = Find-QuestAdbExe
 # first). Only reads `adb devices`: finding the headset (adb connect, mDNS, adb server restart) is left
 # to the keep-awake helper the session starts.
@@ -222,18 +222,17 @@ function Get-PlaylistQuestSerial {
 
 # ---- Quest XR page (individual_transcode\xr, Start-PlaylistLocalQuestXr.ps1) ----
 
-# Which player the workflow start opens on the headset: 'xr' (default: the XR page in Quest Browser,
-# served from this PC), 'skybox' (SKYBOX VR Player app) or 'none'.
-# $env:PLAYLIST_QUEST_PLAYER, else questPlaylistPlayer in loop-segments-windows.json. The older
-# off switches still apply to SKYBOX: questPlaylistLaunchSkybox=false / PLAYLIST_QUEST_SKYBOX=0.
+# What the workflow start opens on the headset: 'xr' (default: the XR page in Quest Browser, served
+# from this PC) or 'none'. $env:PLAYLIST_QUEST_PLAYER, else questPlaylistPlayer in
+# loop-segments-windows.json. Anything else (e.g. a leftover 'skybox': SKYBOX VR Player as the player
+# was removed 2026-11-23) = 'xr'.
 function Get-PlaylistQuestPlayer {
     $raw = [string]$env:PLAYLIST_QUEST_PLAYER
     if ([string]::IsNullOrWhiteSpace($raw)) {
         $cfg = Get-LoopSegmentsWindowsSettings
         if ($cfg.Contains('questPlaylistPlayer') -and $cfg.questPlaylistPlayer) { $raw = [string]$cfg.questPlaylistPlayer }
     }
-    $p = ([string]$raw).Trim().ToLowerInvariant()
-    if ($p -in @('xr', 'skybox', 'none')) { return $p }
+    if (([string]$raw).Trim().ToLowerInvariant() -eq 'none') { return 'none' }
     return 'xr'
 }
 

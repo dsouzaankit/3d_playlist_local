@@ -529,23 +529,23 @@ function Remove-DlnaSegmentRootSubst {
 }
 
 # Quest session (Start-PlaylistQuestSession.ps1 sets PLAYLIST_QUEST_SESSION_PID to the workflow PID):
-# force-stop the Quest players reading the segments before quit cleanup renames them. Only in the
-# workflow process itself (per-clip children inherit the variable but have another PID). <= 30 s.
-function Stop-PlaylistQuestMediaAppsBeforeQuit {
+# close the XR page's Quest Browser tabs before quit cleanup renames the segments it streams
+# (quest\Close-PlaylistLocalQuestXrTabs.ps1). Only in the workflow process itself (per-clip children
+# inherit the variable but have another PID). <= 30 s.
+function Close-PlaylistQuestXrBeforeQuit {
     if ([string]$env:PLAYLIST_QUEST_SESSION_PID -ne [string]$PID) { return }
-    if ($env:PLAYLIST_QUEST_PLAYERS_STOPPED -eq '1') { return }
-    $env:PLAYLIST_QUEST_PLAYERS_STOPPED = '1'
-    $repo = [string]$env:LOOPSEGMENTS_IOS_REPO
-    $watch = if ($repo) { Join-Path $repo 'windows\quest\Watch-LoopSegmentsQuestLanTab.ps1' } else { '' }
-    if (-not $watch -or -not (Test-Path -LiteralPath $watch -PathType Leaf)) { return }
+    if ($env:PLAYLIST_QUEST_XR_CLOSED -eq '1') { return }
+    $env:PLAYLIST_QUEST_XR_CLOSED = '1'
+    $script = Join-Path $PSScriptRoot 'quest\Close-PlaylistLocalQuestXrTabs.ps1'
+    if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { return }
     $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
     if (-not $pwsh) { return }
     try {
-        Write-Host 'Quest: stopping players reading the segments (before quit cleanup)...'
-        $p = Start-Process -FilePath $pwsh -ArgumentList ('-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}" -StopMediaApps' -f $watch) -WindowStyle Hidden -PassThru
-        if (-not $p.WaitForExit(30000)) { try { $p.Kill() } catch {}; Write-Warning 'Quest: player stop timed out (30 s).' }
+        Write-Host 'Quest: closing the XR page (before quit cleanup renames the segments)...'
+        $p = Start-Process -FilePath $pwsh -ArgumentList ('-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $script) -WindowStyle Hidden -PassThru
+        if (-not $p.WaitForExit(30000)) { try { $p.Kill() } catch {}; Write-Warning 'Quest: closing the XR page timed out (30 s).' }
     } catch {
-        Write-Warning ("Quest: player stop failed: {0}" -f $_.Exception.Message)
+        Write-Warning ("Quest: closing the XR page failed: {0}" -f $_.Exception.Message)
     }
 }
 
@@ -573,7 +573,7 @@ function Invoke-DlnaWorkflowQuitCleanup {
     $obf = $null
     $subst = $null
     if (-not $DryRun.IsPresent) {
-        Stop-PlaylistQuestMediaAppsBeforeQuit
+        Close-PlaylistQuestXrBeforeQuit
         try {
             Sync-SkyboxDlnaShareMapping -ExpectedRoot $script:DlnaSegmentRootPreferred -Removed
         } catch {

@@ -170,21 +170,15 @@ Run sequence:
 #   individual_transcode\Start-PlaylistQuestSession.ps1 at start (not -DryRun): in the background it holds the
 #   Quest proximity sensor off and opens the Quest control page in Quest Browser; this window prints a sign-in
 #   link to the same page for the PC (optional, nothing opens there). Once the headset is awake and the page is open,
-#   the Quest player opens in front - questPlaylistPlayer (ios_3d_loop_segments\windows\loop-segments-windows.json) or
-#   $env:PLAYLIST_QUEST_PLAYER = xr (default) | skybox | none:
-#   xr: the XR player page (below), served from this PC and opened in Quest Browser next to the control page.
-#   skybox: SKYBOX VR Player is opened in front (quest\Start-PlaylistLocalQuestSkybox.ps1; app only - pick the segments
-#   from the SKYBOX PC share; SKYBOX not installed on the headset = logged, not launched; off: $env:PLAYLIST_QUEST_SKYBOX='0'
-#   or questPlaylistLaunchSkybox=false).
-#   Caveat (skybox): SKYBOX resets Global Settings > Passthrough on every launch (also after a normal quit, so not caused by
-#   the workflow's force-stop) - switch it on by hand each session. It cannot be preset: the setting is in SKYBOX's
-#   internal storage (app not debuggable, so no adb run-as/backup), and its menus take controller input, not adb taps.
-#   (Per-video passthrough IS persisted, in /sdcard/Android/data/xyz.skybox.player.ovr/files/SkyboxDataBase
-#   MediaCustomSettings "IsPassthrough", but that is a ChromaKey video effect, not the home environment.)
-#   Every quit (End session or natural end) first force-stops the Quest
-#   players reading the segments (Invoke-DlnaWorkflowQuitCleanup, before the rename), and after the workflow is gone
+#   the XR player page (below) opens in front: served from this PC and opened in Quest Browser next to the control
+#   page. questPlaylistPlayer (ios_3d_loop_segments\windows\loop-segments-windows.json) or $env:PLAYLIST_QUEST_PLAYER =
+#   none skips it. (SKYBOX VR Player as the Quest player - "skybox" - was removed 2026-11-23: WebXR in Quest Browser
+#   replaced it, and SKYBOX reset its passthrough on every launch. A leftover "skybox" opens the XR page.)
+#   Every quit (End session or natural end) first closes the XR page's Quest Browser tabs
+#   (quest\Close-PlaylistLocalQuestXrTabs.ps1, from Invoke-DlnaWorkflowQuitCleanup before the rename, so it stops
+#   reading the segments), and after the workflow is gone
 #   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off. That page's Space button = Space
-#   here; its End session button stops everything running: Quest players reading the output, Enter in every
+#   here; its End session button stops everything running: the XR page (its tabs closed), Enter in every
 #   3d_playlist_local window (an Enter that did not get through is retried every 5 s, up to 3 times; Enter again
 #   after 60 s; killed after ~3 min), then the Loop Segments companion
 #   (its own quit cleans up the Quest, L: and the phone) - or, without the companion, the Quest cleanup itself
