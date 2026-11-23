@@ -89,23 +89,16 @@ try {
 } catch {}
 Write-PlaylistQuestLog "Playlist session: $WorkflowName workflow started (PID $WorkflowPid) - sensor off + control page to the headset."
 
-# 0. A previous quit's after-quit history helper (Watch-LoopSegmentsQuestLanTab.ps1 -RetryHistory) still
+# 0. A previous quit's after-quit history helper (quest_tools' Invoke-QuestHistoryRetry.ps1) still
 #    waiting for the headset would run that old quit's cleanup once the headset is worn - mid-run: close
 #    this session's control page tab and Quest Browser, switch Wi-Fi off. Stop it first, as the Loop
 #    Segments companion does at its start (QuestCompanionHooks.ps1 Stop-QuestHistoryRetry); this session's
 #    quit deletes the same entries.
-$historyPending = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
-$stoppedHelpers = 0
-try {
-    Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { ([string]$_.CommandLine) -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and ([string]$_.CommandLine) -like '*-RetryHistory*' } |
-        ForEach-Object { Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue; $stoppedHelpers++ }
-} catch {}
-if ($stoppedHelpers -or (Test-Path -LiteralPath $historyPending)) {
-    Remove-Item -LiteralPath $historyPending -Force -ErrorAction SilentlyContinue
+$stopped = Stop-QuestHistoryRetry
+if ($stopped.Stopped -or $stopped.Pending) {
     # The Wi-Fi AP bounce that helper was holding: this session's quit probes again.
     Remove-Item -LiteralPath (Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json') -Force -ErrorAction SilentlyContinue
-    Write-PlaylistQuestLog "Playlist session: stopped the last quit's history helper ($stoppedHelpers process(es)); this session's quit deletes those entries."
+    Write-PlaylistQuestLog "Playlist session: stopped the last quit's history helper ($($stopped.Stopped) process(es)); this session's quit deletes those entries."
 }
 
 $pwsh = Get-PlaylistQuestPwsh

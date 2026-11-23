@@ -52,7 +52,8 @@ $cfg = Get-LoopSegmentsWindowsSettings
 $pwsh = Get-PlaylistQuestPwsh
 $watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
 $keyScript = Join-Path $script:LsQuestDir 'Send-PlaylistLocalSpaceKey.ps1'
-$pendingHistoryPath = Join-Path $env:TEMP 'loopsegments-quest-history-pending.json'
+# The after-quit helper's pending delete (quest_tools lib\QuestHistoryRetry.ps1).
+$pendingHistoryPath = $script:QuestHistoryPendingPath
 
 # ---- Progress file (one run at a time) ----
 
@@ -303,7 +304,7 @@ if (-not $companion.Count) {
         if (@(Get-QuestLogSince -Since $closeAt | Where-Object { $_ -match ' Cleanup: finished ' }).Count) { $questDoneBy = 'companion'; break }
         if (Test-PendingHistorySince -Since $closeAt) { $questDoneBy = 'helper'; break }
         if (-not @(Get-PlaylistQuestCompanionProcesses).Count -and ((Get-Date) - $closeAt).TotalSeconds -ge 20 -and
-            -not @(Get-PlaylistQuestHelperProcesses -Pattern '*-ClearHistory*' | Where-Object { ([string]$_.CommandLine) -notlike '*-RetryHistory*' }).Count) { break }
+            -not @(Get-PlaylistQuestHelperProcesses -Pattern '*-ClearHistory*').Count) { break }
         Start-Sleep -Seconds 2
     }
     $how = if ($forced) { 'Chromium force-closed after 30 s' } else { 'Chromium closed' }

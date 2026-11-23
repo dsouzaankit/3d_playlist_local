@@ -191,7 +191,7 @@ Run sequence:
 #   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way. End session runs its helpers at
 #   above-normal priority (a fisheye run slowed them down to timeouts). Phone not answering at cleanup: the helper page
 #   that clears Quest Browser's Recently closed list is served from this PC (port questControlPort + 1, default 18767).
-#   Headset not worn at quit: an after-quit history helper (-RetryHistory) finishes that cleanup when it is next worn.
+#   Headset not worn at quit: quest_tools' after-quit history helper (Invoke-QuestHistoryRetry.ps1) finishes that cleanup when it is next worn.
 #   A new workflow start stops any such helper first (log: "stopped the last quit's history helper"), so it cannot
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
