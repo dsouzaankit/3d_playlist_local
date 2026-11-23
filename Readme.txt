@@ -190,6 +190,13 @@ Run sequence:
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
 #   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
+#   Why the control page (windows\quest\Serve-QuestControlPage.ps1) is not in this repo: it is one page shared
+#     with the Loop Segments companion (one server on questControlPort 18766, one PC sign-in token, one
+#     loop-segments-windows.json, one log), and it is built on Loop Segments pieces (lib\LoopSegments-Windows.ps1,
+#     the companion's lan_config.json, the PC <-> phone LAN probe, the SKYBOX buttons). Two copies would fight over
+#     the port and the Quest Browser tab. So some playlist-only pieces live there too (Send-PlaylistLocalSpaceKey.ps1,
+#     the PC -> Quest LAN test that sets this repo's segment bitrate): change those in ios_3d_loop_segments.
+#     Generic parts (e.g. the speed test) could move to quest_tools; the page itself would still need Loop Segments.
 #   Generic headset layer (adb, finding the headset, proximity sensor, Wi-Fi off, Quest Browser DevTools, SKYBOX
 #   database): the quest_tools repo, P:\all_scripts\quest_tools ($env:QUEST_TOOLS_REPO, else <scripts root>\quest_tools,
 #   else a quest_tools folder next to this repo), loaded by both this repo's quest\ scripts and Loop Segments'. One
