@@ -66,6 +66,8 @@ Run sequence:
 #     wall-clock deadline kills the child/ffmpeg (exit 124) and stops the batch. Enter cancel = 130.
 #   No automatic remount of source UNC/mapped drives. Ensure-DlnaSegmentRoot only keeps dummy
 #     subst M: for DLNA *output*, not input media.
+#   L: rclone (Loop Segments): hang / Explorer freeze / mid-stall wrap leaves looking torn — see
+#     ios_3d_loop_segments\windows\rclone\RCLONE-PHONE-MOUNT.md (Restart-ExplorerShell.ps1 vs -Unstick).
 #
 # DLNA segment root (flat / fisheye / hybrid): M:\m1_media\3d_fullsbs_trans
 #   Skybox PC client share should keep pointing at that path.
