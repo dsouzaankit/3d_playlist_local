@@ -177,7 +177,8 @@ Run sequence:
 #   Every quit (End session or natural end) first closes the XR page's Quest Browser tabs
 #   (quest\Close-PlaylistLocalQuestXrTabs.ps1, from Invoke-DlnaWorkflowQuitCleanup before the rename, so it stops
 #   reading the segments), and after the workflow is gone
-#   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off.
+#   the Quest tabs / history are cleaned, the sensor goes back on and the Quest Wi-Fi off ("wifiOffOnExit": false in
+#   quest_tools' quest-tools.json leaves it on).
 #   "Natural end" = any exit of the workflow window: queue done (orchestrator "live playlist/disk queue empty"),
 #   batch timeout (124), Enter cancel (130) or an error - all reach finally. The headset step is the hidden
 #   Start-PlaylistLocalQuestSession.ps1 -CleanupWhenGone watcher: it polls every 3 s until the workflow PID and every
@@ -194,6 +195,7 @@ Run sequence:
 #   above-normal priority (a fisheye run slowed them down to timeouts). Phone not answering at cleanup: the helper page
 #   that clears Quest Browser's Recently closed list is served from this PC (port controlPort + 1, default 18767).
 #   Headset not worn at quit: quest_tools' after-quit history helper (Invoke-QuestHistoryRetry.ps1) finishes that cleanup when it is next worn.
+#   Headset off adb at quit (Wi-Fi off, asleep, out of range): the same helper does the whole cleanup once it is back on adb.
 #   A new workflow start stops any such helper first (log: "stopped the last quit's history helper"), so it cannot
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
 #   Off: $env:PLAYLIST_QUEST_SESSION='0', or "session": false in individual_transcode\quest\playlist-quest.json.
