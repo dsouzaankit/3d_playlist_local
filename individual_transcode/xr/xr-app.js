@@ -1042,9 +1042,22 @@
       }
     }, 1000);
   })();
+  // A clip that fails while following the live slots (the server answers 410 once a version is gone)
+  // moves on to the next segment; only repeated failures drop back to the file list.
+  var errorStreak = 0;
+  video.addEventListener("playing", function () { errorStreak = 0; });
   video.addEventListener("error", function () {
     var playlist = activePlaylist();
     var item = playlist[index];
+    var err = video.error;
+    try { xrLog("media-error", { name: item && item.name, code: err && err.code, msg: err && err.message, streak: errorStreak + 1 }); } catch (eL) {}
+    if (!video.getAttribute("src")) return;  // src removed on purpose (home / mode switch)
+    if (wantPlay && playlist.length && ++errorStreak <= 3) {
+      setLabel("Could not play " + leafName(item && item.name) + " — moving to the next segment…");
+      advanceLive();
+      return;
+    }
+    errorStreak = 0;
     setLabel("Could not load " + (item && item.name ? item.name : "media")
       + (playlist.length > 1 ? " — pick another from the list" : " (no finished segment yet?)"));
     wantPlay = false;

@@ -214,11 +214,14 @@ Run sequence:
 #     read-only, no login. Serves /xr, the A-Frame assets and the DLNA segments straight from the store
 #     %APPDATA%\3d_playlist_local\{hybrid,fisheye,flat}\3d_op_NN[_Suffix].mkv (HTTP Range; opened with full share flags
 #     so the quit rename and the wrap-2 rewrite still work while the headset streams). Stops when the workflow (and every
-#     other registered workflow) is gone. A finished segment is copied on first request to
-#     %TEMP%\playlist-xr-snapshots (newest 6 kept, cleared at start) and played from the copy: segment_wrap 2 at ~1x
-#     (flat: 20 s burst + 1.2x catch-up) truncates the watched slot before its last seconds play, which used to stall
-#     the page near the end of each minute with no advance. The page also advances after a 6 s stall within 8 s of the
-#     end (debug ring: stall-advance). Loop Segments never needed this: the iPhone writes each segment to
+#     other registered workflow) is gone. Each finished segment of a folder a page is watching is copied within ~1 s
+#     to %TEMP%\playlist-xr-snapshots (newest 4 per folder kept, cleared at start) and played from the copy:
+#     segment_wrap 2 at ~1x (flat: 20 s burst + 1.2x catch-up) truncates the watched slot before its last seconds
+#     play, which used to stall the page near the end of each minute with no advance. Copies are made eagerly, not on
+#     request, because the page drifts a few seconds behind the writer every minute (load + buffering ~100 Mbit/s):
+#     on-demand copies failed once it lagged ~50 s. A version with no copy left gets 410 instead of the new bytes.
+#     The page moves to the next segment on a media error (up to 3 in a row, debug ring: media-error) and after a
+#     6 s stall within 8 s of the end (stall-advance). Loop Segments never needed this: the iPhone writes each segment to
 #     op_NN.staging.mp4 (not listed) and swaps it into the slot only when complete, so a clip stays whole for ~120 s.
 #     The fix lives only here (serve_xr_page.py + xr-app.js), not in the shared quest_tools engine.
 #     Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log

@@ -64,7 +64,11 @@ CHUNK = 1024 * 1024
 # before playback reaches its end: Range reads past the new size came back short, the <video> stalled in
 # its last seconds and never fired "ended" (no advance to the next segment).
 SNAP_DIR = os.path.join(TEMP, "playlist-xr-snapshots")
-SNAP_KEEP = 6               # newest copies kept (2 slots x 3 folders)
+# snapshot_watcher makes the copy as soon as a slot is finished (for folders a page streamed from in the
+# last WATCH_SEC), not on first request: the page drifts a few seconds behind the writer each minute
+# (load + buffering), so by the time it asked for a slot the muxer could already be rewriting it.
+SNAP_KEEP = 4               # newest copies kept per folder (~2 minutes per slot)
+WATCH_SEC = 600
 GROWING_SEC = 2.5           # written within this long = still being muxed (xr-app.js GROWING_MS)
 
 
@@ -176,6 +180,7 @@ class Server(ThreadingHTTPServer):
         self.debug_lock = threading.Lock()
         self.snap_lock = threading.Lock()
         self.snap_locks: dict[str, threading.Lock] = {}
+        self.watched: dict[str, float] = {}  # folder -> last /media request (snapshot_watcher copies these)
 
     def server_bind(self):
         # HTTPServer.server_bind calls socket.getfqdn(), which took ~6 s on this LAN (the launcher waits 10 s).
@@ -277,8 +282,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._not_found(head_only)
                 return
             ext = os.path.splitext(full)[1].lower()
-            snap = self._snapshot(rel, full, parse_qs(parts.query))
-            self._file(snap or full, VIDEO_EXT[ext], head_only, ranged=True)
+            self.server.watched[rel.split("/")[0]] = time.time()
+            q = parse_qs(parts.query)
+            try:
+                want = (int((q.get("b") or [""])[0]), int((q.get("t") or [""])[0]))
+            except ValueError:
+                want = None  # old-style URL: the live file
+            if want:
+                snap, status = make_snapshot(self.server, rel, full, *want)
+                if snap:
+                    self._file(snap, VIDEO_EXT[ext], head_only, ranged=True)
+                    return
+                if status == "gone":
+                    # The slot already holds a newer minute and no copy of this one is left: serving the new
+                    # bytes under the old version only breaks the decoder. 410 -> the page moves on.
+                    self._send(410, b"segment version gone", "text/plain", head_only=head_only)
+                    return
+            self._file(full, VIDEO_EXT[ext], head_only, ranged=True)
             return
         self._not_found(head_only)
 
@@ -296,58 +316,6 @@ class Handler(BaseHTTPRequestHandler):
         if os.path.dirname(full) != base or not os.path.isfile(full):
             return None
         return full
-
-    def _snapshot(self, rel: str, full: str, query: dict) -> str | None:
-        """Path of a private copy of the version the page asked for (?b=&t=), made on first request when
-        the live file is that version and finished. None = serve the live file (old URL without t, the
-        slot is still growing, or it was already rewritten before any copy was made)."""
-        try:
-            want_b = int((query.get("b") or [""])[0])
-            want_t = int((query.get("t") or [""])[0])
-        except ValueError:
-            return None
-        key = "%s_%d_%d" % (rel.replace("/", "__"), want_b, want_t)
-        dest = os.path.join(SNAP_DIR, key + os.path.splitext(full)[1].lower())
-        if os.path.isfile(dest):
-            touch(dest)
-            return dest
-        with self.server.snap_lock:
-            lock = self.server.snap_locks.setdefault(key, threading.Lock())
-        with lock:
-            if os.path.isfile(dest):
-                return dest
-            try:
-                st = os.stat(full)
-            except OSError:
-                return None
-            if st.st_size != want_b or int(st.st_mtime * 1000) != want_t or time.time() - st.st_mtime < GROWING_SEC:
-                return None
-            tmp = dest + ".part"
-            try:
-                os.makedirs(SNAP_DIR, exist_ok=True)
-                t0 = time.time()
-                with open_shared(full) as src, open(tmp, "wb") as out:
-                    while True:
-                        buf = src.read(8 * CHUNK)
-                        if not buf:
-                            break
-                        out.write(buf)
-                st2 = os.stat(full)
-                if (st2.st_size, st2.st_mtime_ns) != (st.st_size, st.st_mtime_ns) or os.path.getsize(tmp) != st.st_size:
-                    log("XR server: %s changed while copying - serving it live." % rel)
-                    os.remove(tmp)
-                    return None
-                os.replace(tmp, dest)
-                log("XR server: snapshot %s (%.1f MB, %.1f s)." % (rel, st.st_size / 1048576.0, time.time() - t0))
-            except OSError as ex:
-                log("XR server: snapshot %s failed (%s) - serving it live." % (rel, ex))
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                return None
-        prune_snapshots(keep=dest)
-        return dest
 
     def _lists(self) -> dict:
         now = time.time()
@@ -466,21 +434,112 @@ def touch(path: str) -> None:
         pass
 
 
+def snapshot_path(rel: str, size: int, mtime_ms: int) -> str:
+    leaf = "%s_%d_%d%s" % (rel.replace("/", "__"), size, mtime_ms, os.path.splitext(rel)[1].lower())
+    return os.path.join(SNAP_DIR, leaf)
+
+
+def make_snapshot(server, rel: str, full: str, want_b: int, want_t: int):
+    """(path, "ok") for a private copy of version (bytes, mtime ms) of a segment, copying it now if the live
+    file is that version and finished. Else (None, status): "growing" (still muxed: serve live), "gone" (the
+    slot was rewritten and no copy is left), "fail" (copy failed or the file changed during it: serve live)."""
+    dest = snapshot_path(rel, want_b, want_t)
+    if os.path.isfile(dest):
+        touch(dest)
+        return dest, "ok"
+    with server.snap_lock:
+        lock = server.snap_locks.setdefault(dest, threading.Lock())
+    with lock:
+        if os.path.isfile(dest):
+            return dest, "ok"
+        try:
+            st = os.stat(full)
+        except OSError:
+            return None, "gone"
+        if st.st_size != want_b or int(st.st_mtime * 1000) != want_t:
+            return None, "gone"
+        if time.time() - st.st_mtime < GROWING_SEC:
+            return None, "growing"
+        tmp = dest + ".part"
+        try:
+            os.makedirs(SNAP_DIR, exist_ok=True)
+            t0 = time.time()
+            with open_shared(full) as src, open(tmp, "wb") as out:
+                while True:
+                    buf = src.read(8 * CHUNK)
+                    if not buf:
+                        break
+                    out.write(buf)
+            st2 = os.stat(full)
+            if (st2.st_size, st2.st_mtime_ns) != (st.st_size, st.st_mtime_ns) or os.path.getsize(tmp) != st.st_size:
+                log("XR server: %s changed while copying - no snapshot." % rel)
+                os.remove(tmp)
+                return None, "fail"
+            os.replace(tmp, dest)
+            log("XR server: snapshot %s (%.1f MB, %.1f s)." % (rel, st.st_size / 1048576.0, time.time() - t0))
+        except OSError as ex:
+            log("XR server: snapshot %s failed (%s)." % (rel, ex))
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None, "fail"
+    with server.snap_lock:
+        server.snap_locks.pop(dest, None)
+    prune_snapshots(keep=dest)
+    return dest, "ok"
+
+
+def snapshot_watcher(server) -> None:
+    """Copy each finished slot of a watched folder within ~1 s of the muxer closing it."""
+    while True:
+        time.sleep(1.0)
+        now = time.time()
+        for folder in [f for f, t in list(server.watched.items()) if now - t < WATCH_SEC]:
+            try:
+                entries = list(os.scandir(os.path.join(server.opts.root, folder)))
+            except OSError:
+                continue
+            for e in entries:
+                if not e.is_file() or not re.match(r"(?i)^3d_op_\d+", e.name):
+                    continue
+                if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
+                    continue
+                try:
+                    st = e.stat()
+                except OSError:
+                    continue
+                if now - st.st_mtime < GROWING_SEC or st.st_size <= 0:
+                    continue
+                rel = "%s/%s" % (folder, e.name)
+                ver = (st.st_size, int(st.st_mtime * 1000))
+                if os.path.isfile(snapshot_path(rel, *ver)):
+                    continue
+                try:
+                    make_snapshot(server, rel, e.path, *ver)
+                except Exception as ex:  # never let the watcher die
+                    log("XR server: snapshot watcher %s: %s" % (rel, ex))
+
+
 def prune_snapshots(keep: str = "", limit: int = SNAP_KEEP) -> None:
-    """Keep the `limit` most recently used copies. A copy being streamed is opened with FILE_SHARE_DELETE,
-    so removing it only unlinks the name; the open reader finishes."""
+    """Keep the `limit` most recently used copies per folder (limit 0 = remove all, .part included). A copy
+    being streamed is opened with FILE_SHARE_DELETE, so removing it only unlinks the name; the reader finishes."""
     try:
         entries = [e for e in os.scandir(SNAP_DIR) if e.is_file() and (limit <= 0 or not e.name.endswith(".part"))]
     except OSError:
         return
-    entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
-    for e in entries[limit:] if limit > 0 else entries:
-        if os.path.abspath(e.path) == os.path.abspath(keep):
-            continue
-        try:
-            os.remove(e.path)
-        except OSError:
-            pass
+    groups = {}
+    for e in entries:
+        groups.setdefault(e.name.split("__", 1)[0], []).append(e)
+    for group in groups.values():
+        group.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        for e in (group[limit:] if limit > 0 else group):
+            if os.path.abspath(e.path) == os.path.abspath(keep):
+                continue
+            try:
+                os.remove(e.path)
+            except OSError:
+                pass
 
 
 def asset_build(opts) -> str:
@@ -538,6 +597,7 @@ def main() -> int:
         pass
     log("XR server: listening on %s:%d, root %s, engine %s (PID %d%s)." % (
         opts.bind, opts.port, opts.root, opts.engine_dir, os.getpid(), ", parent %d" % opts.parent_pid if opts.parent_pid else ""))
+    threading.Thread(target=snapshot_watcher, args=(server,), daemon=True).start()
     if opts.parent_pid > 0:
         threading.Thread(target=watch_parent, args=(server, opts.parent_pid), daemon=True).start()
     try:
