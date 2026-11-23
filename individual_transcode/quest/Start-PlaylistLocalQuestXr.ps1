@@ -27,8 +27,9 @@
        Browser restarts once (WebXR needs a secure context). A name the browser then fails to load
        falls back to the IPv4 once.
 
-  The opened origin is kept in %TEMP%\playlist-xr-origins.json; the workflow quit closes its tabs and
-  deletes its history with the control page's (PlaylistLocalQuestCommon.ps1 Get-PlaylistQuestExtraOrigins).
+  The opened origin is kept in %TEMP%\playlist-xr-origins.json and in quest_tools' shared origin list
+  (%TEMP%\quest-browser-origins.json, owner 3d_playlist_local-xr); the workflow quit and the Loop
+  Segments companion's quit both close its tabs and delete its history.
 
   First run: Windows Firewall may ask to allow python.exe on private networks - allow it, or the
   headset cannot reach the page.
@@ -152,8 +153,9 @@ function Resolve-PlaylistXrHost {
 function Invoke-PlaylistXrOpen {
     param([string] $Url)
     $watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
-    # -NoLanLogin: no phone admin:<password>@ sign-in for this PC page.
-    $p = Start-PlaylistQuestHidden -Pwsh (Get-PlaylistQuestPwsh) -Script $watch -Arguments @('-Url', $Url, '-NoLanLogin', '-WaitMinutes', '3')
+    # -NoLanLogin: no phone admin:<password>@ sign-in for this PC page. -Owner: its entry in quest_tools'
+    # shared origin list (the watcher registers the page there).
+    $p = Start-PlaylistQuestHidden -Pwsh (Get-PlaylistQuestPwsh) -Script $watch -Arguments @('-Url', $Url, '-NoLanLogin', '-WaitMinutes', '3', '-Owner', $script:PlaylistXrOwner)
     if (-not $p.WaitForExit(420000)) { try { $p.Kill($true) } catch {}; return -1 }
     return $p.ExitCode
 }

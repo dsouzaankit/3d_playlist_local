@@ -162,6 +162,10 @@ function Get-PlaylistQuestExtraOrigins {
     # {pc} = this PC's address on the route to the headset (worked out by the watcher).
     $list += @("http://{pc}:$((Get-PlaylistXrSettings).Port)")
     $list += @(Get-PlaylistXrSavedOrigins)
+    # quest_tools' shared origin list (QuestOrigins.ps1): pages any project other than the Loop
+    # Segments companion opened on the headset. The companion's own pages (phone LAN page, control
+    # page) are left to its quit, which also reads this list.
+    $list += @(Get-QuestRegisteredOrigins -ExcludeOwner $script:PlaylistQuestCompanionOwners)
     return @($list | Select-Object -Unique)
 }
 
@@ -263,7 +267,12 @@ function Get-PlaylistXrSettings {
 }
 
 # XR page origins opened on the headset (last 8): the quit closes their tabs and deletes their history.
+# Each one also goes into quest_tools' shared origin list under this owner, so the Loop Segments
+# companion's quit closes and deletes it too.
 $script:PlaylistXrOriginsPath = Join-Path $env:TEMP 'playlist-xr-origins.json'
+$script:PlaylistXrOwner = '3d_playlist_local-xr'
+# Owners the Loop Segments watcher registers its own pages under (Watch-LoopSegmentsQuestLanTab.ps1).
+$script:PlaylistQuestCompanionOwners = @('loopsegments', 'loopsegments-control')
 
 function Get-PlaylistXrSavedOrigins {
     try { return @((Get-Content -LiteralPath $script:PlaylistXrOriginsPath -Raw -ErrorAction Stop | ConvertFrom-Json).origins | Where-Object { $_ }) } catch { return @() }
@@ -274,4 +283,5 @@ function Add-PlaylistXrSavedOrigin {
     if (-not $Origin) { return }
     $list = @(@($Origin) + @(Get-PlaylistXrSavedOrigins | Where-Object { $_ -ne $Origin }) | Select-Object -First 8)
     try { @{ origins = $list } | ConvertTo-Json | Set-Content -LiteralPath $script:PlaylistXrOriginsPath -Encoding utf8 } catch {}
+    Register-QuestBrowserOrigin -Origin $Origin -Owner $script:PlaylistXrOwner
 }

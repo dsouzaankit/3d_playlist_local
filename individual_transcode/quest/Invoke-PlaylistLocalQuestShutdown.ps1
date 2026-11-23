@@ -19,8 +19,9 @@
        cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
     3. (nothing opens on the PC any more: a control page tab you opened there closes itself);
     4. the companion (launcher shell or its Chromium running):
-       a. questPlaylistHistoryOrigins: deleted now (-ClearHistory -OnlyExtraOrigins), while the
-          headset is still on Wi-Fi: the companion's quit does not know them;
+       a. questPlaylistHistoryOrigins + the XR page: their tabs closed, then their history deleted
+          now (-ClearHistory -OnlyExtraOrigins -CloseLanTabs), while the headset is still on Wi-Fi:
+          the companion's quit does not know them;
        b. close its Chromium gracefully (taskkill without /F: profile saved and synced), force after
           30 s: its normal quit runs (Quest tabs / history / SKYBOX / sensor / Wi-Fi off, rclone L:,
           Keep Alive, iPhone Home: the Loop Segments app);
@@ -277,8 +278,12 @@ if (-not $companion.Count) {
     Set-ShutdownStep -Name 'Companion' -Result 'not running' -Level skip
 } else {
     # a. Origins only this side knows, while the headset is still on Wi-Fi.
+    #    Their tabs (the XR page) are closed first, per questCloseLanTabsOnExit: the companion's quit
+    #    closes only its own tabs, and an XR tab left open kept its page in Quest history.
     if (@(Get-PlaylistQuestExtraOrigins).Count) {
-        $x = Invoke-ShutdownWatch -Arguments (@('-Url', (Get-PlaylistQuestHistoryUrl), '-ClearHistory', '-OnlyExtraOrigins', '-ExtraOrigins', (@(Get-PlaylistQuestExtraOrigins) -join ','))) -TimeoutSec 60
+        $xArgs = @('-Url', (Get-PlaylistQuestHistoryUrl), '-ClearHistory', '-OnlyExtraOrigins', '-ExtraOrigins', (@(Get-PlaylistQuestExtraOrigins) -join ','))
+        if (-not ($cfg.Contains('questCloseLanTabsOnExit') -and $cfg.questCloseLanTabsOnExit -eq $false)) { $xArgs += '-CloseLanTabs' }
+        $x = Invoke-ShutdownWatch -Arguments $xArgs -TimeoutSec 60
         Set-ShutdownStep -Name 'Extra history origins' -Result $(switch ($x.Code) { 0 { 'deleted' } 1 { 'headset not on adb - left' } default { "failed (exit $($x.Code))" } }) -Level $(if ($x.Code -eq 0) { 'ok' } else { 'warn' })
     }
     # b. Graceful close of its Chromium -> its normal quit.
