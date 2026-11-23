@@ -566,7 +566,13 @@
     // b + t name this version: the server serves a finished one from a snapshot copy, so the wrap-2
     // rewrite of the slot (~60 s after it closed) cannot cut off its last seconds mid-playback.
     if (entry.modifiedMs) q.push("t=" + encodeURIComponent(String(entry.modifiedMs)));
+    if (isGrowing(entry)) q.push("g=1");  // still being muxed: the server serves the live file
     return q.length ? ("?" + q.join("&")) : "";
+  }
+  // The server's flag (Windows lists an open file with 0 bytes and its open time, so ageMs alone said
+  // "finished" for the slot still being written), else the age.
+  function isGrowing(f) {
+    return !!(f && (f.growing || (Number(f.ageMs) || 0) < GROWING_MS));
   }
   function entryFromFile(f) {
     var name = f && f.name;
@@ -576,6 +582,7 @@
       modified: f.modified || "",
       modifiedMs: Number(f.modifiedMs) || 0,
       ageMs: Number(f.ageMs) || 0,
+      growing: isGrowing(f),
       url: "/media/" + String(name).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/") + cacheBust(f)
     };
   }
@@ -600,7 +607,7 @@
   // Start on the newest finished segment (the newest one is usually still being written).
   function liveStartIndex(list) {
     for (var i = list.length - 1; i >= 0; i--) {
-      if (list[i].ageMs >= GROWING_MS) return i;
+      if (!list[i].growing) return i;
     }
     return 0;
   }
@@ -719,7 +726,7 @@
       var newer = list.filter(function (e) { return e.name !== curName && e.modifiedMs > since; });
       if (!newer.length) return null;
       var next = newer[0];
-      var growing = next.ageMs < GROWING_MS && newer.length === 1;
+      var growing = next.growing && newer.length === 1;
       return { item: next, growing: growing };
     }
     function step() {
@@ -727,13 +734,14 @@
         setPlaylists(files);
         var p = pick();
         tries++;
-        if (p && (!p.growing || tries >= 20)) {
+        // A slot takes ~60 s to write: wait it out rather than play it live (that stalls at the write head).
+        if (p && (!p.growing || tries >= 90)) {
           var list = activePlaylist();
           advancing = false;
           loadIndex(list.indexOf(p.item), true);
           return;
         }
-        if (!p && tries >= 20) {
+        if (!p && tries >= 90) {
           advancing = false;
           var l2 = activePlaylist();
           if (!l2.length) { setLabel(emptyLabel()); renderFileList(); return; }
@@ -1026,7 +1034,7 @@
   });
   // Safety net: a clip that stops progressing in its last seconds (slot rewritten before the server
   // could snapshot it, short final cluster, audio/video tail mismatch) never fires "ended". Treat a
-  // 6 s stall within 8 s of the end as the end and move on.
+  // 6 s stall within 8 s of the end, or a 20 s stall anywhere, as the end and move on.
   (function stallWatchdog() {
     var lastT = -1;
     var lastMoveMs = Date.now();
@@ -1044,8 +1052,11 @@
         return;
       }
       var dur = mediaDuration();
-      if (now - lastMoveMs >= 6000 && dur > 0 && dur - cur <= 8) {
-        try { xrLog("stall-advance", { t: cur, dur: dur, readyState: video.readyState, name: (activePlaylist()[index] || {}).name }); } catch (eL) {}
+      var stalledMs = now - lastMoveMs;
+      // 6 s near the end, or 20 s anywhere (unknown duration: a live slot stalled at its write head).
+      var nearEnd = dur > 0 && dur - cur <= 8;
+      if ((nearEnd && stalledMs >= 6000) || stalledMs >= 20000) {
+        try { xrLog("stall-advance", { t: cur, dur: dur, nearEnd: nearEnd, readyState: video.readyState, name: (activePlaylist()[index] || {}).name }); } catch (eL) {}
         lastMoveMs = now;
         if (activePlaylist().length) advanceLive();
       }

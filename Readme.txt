@@ -227,7 +227,10 @@ Run sequence:
 #     request, because the page drifts a few seconds behind the writer every minute (load + buffering ~100 Mbit/s):
 #     on-demand copies failed once it lagged ~50 s. A version with no copy left gets 410 instead of the new bytes.
 #     The page moves to the next segment on a media error (up to 3 in a row, debug ring: media-error) and after a
-#     6 s stall within 8 s of the end (stall-advance). Loop Segments never needed this: the iPhone writes each segment to
+#     6 s stall within 8 s of the end, or 20 s anywhere (stall-advance). "Still being written" comes from os.stat:
+#     Windows lists a file ffmpeg has open as 0 bytes with its open time, so xr_lists.json used to call the slot being
+#     muxed finished; Launch / next-segment then played it live and stalled at the write head. xr_lists.json now
+#     reports the real size and growing=true; the page waits (up to 90 s) for it to finish. Loop Segments never needed this: the iPhone writes each segment to
 #     op_NN.staging.mp4 (not listed) and swaps it into the slot only when complete, so a clip stays whole for ~120 s.
 #     The fix lives only here (serve_xr_page.py + xr-app.js), not in the shared quest_tools engine.
 #     Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log

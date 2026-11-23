@@ -288,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                 want = (int((q.get("b") or [""])[0]), int((q.get("t") or [""])[0]))
             except ValueError:
                 want = None  # old-style URL: the live file
-            if want:
+            if want and not q.get("g"):  # g=1: the page knowingly plays a slot still being written
                 snap, status = make_snapshot(self.server, rel, full, *want)
                 if snap:
                     self._file(snap, VIDEO_EXT[ext], head_only, ranged=True)
@@ -332,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
                     continue
                 try:
-                    st = e.stat()
+                    st, growing = file_state(e, now)
                 except OSError:
                     continue
                 files.append({
@@ -341,6 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                     "modified": _dt.datetime.fromtimestamp(st.st_mtime, _dt.timezone.utc).isoformat(),
                     "modifiedMs": int(st.st_mtime * 1000),
                     "ageMs": max(0, int((now - st.st_mtime) * 1000)),
+                    "growing": growing,
                 })
         return {"root": self.server.opts.root, "now": int(now * 1000), "files": files}
 
@@ -434,6 +435,18 @@ def touch(path: str) -> None:
         pass
 
 
+def file_state(entry, now: float):
+    """(os.stat result, still being written?) for a segment. On Windows the directory listing (scandir /
+    FindFirstFile) is only updated when the writer closes the file: a slot ffmpeg is muxing shows 0 bytes and
+    the time it was opened, so it looked finished after 2.5 s and the page played it live and stalled at the
+    write head. os.stat opens the file and sees the real size and a fresh mtime; a listing that disagrees
+    with it means the file is still open for writing."""
+    st = os.stat(entry.path)
+    listed = entry.stat()
+    growing = listed.st_size != st.st_size or now - st.st_mtime < GROWING_SEC
+    return st, growing
+
+
 def snapshot_path(rel: str, size: int, mtime_ms: int) -> str:
     leaf = "%s_%d_%d%s" % (rel.replace("/", "__"), size, mtime_ms, os.path.splitext(rel)[1].lower())
     return os.path.join(SNAP_DIR, leaf)
@@ -506,10 +519,10 @@ def snapshot_watcher(server) -> None:
                 if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
                     continue
                 try:
-                    st = e.stat()
+                    st, growing = file_state(e, now)
                 except OSError:
                     continue
-                if now - st.st_mtime < GROWING_SEC or st.st_size <= 0:
+                if growing or st.st_size <= 0:
                     continue
                 rel = "%s/%s" % (folder, e.name)
                 ver = (st.st_size, int(st.st_mtime * 1000))
