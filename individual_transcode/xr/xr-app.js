@@ -113,14 +113,15 @@
     return playlists[mode] || [];
   }
   function emptyLabel() {
-    return "No " + FOLDERS[mode] + "3d_op_*.mkv yet — start the " + MODE_LABELS[mode].toLowerCase()
-      + " workflow (or wait for its first 60 s segment), then Refresh list";
+    return "No " + FOLDERS[mode] + "3d_op_*.mkv from this run yet — start the " + MODE_LABELS[mode].toLowerCase()
+      + " workflow (or wait for its first 60 s segment); the list fills in by itself";
   }
   function modeTag() {
     return mode;
   }
   function listGroupTitle() {
-    return MODE_LABELS[mode] + " segments (" + FOLDERS[mode] + ", oldest first)";
+    return MODE_LABELS[mode] + " segments (" + FOLDERS[mode] + ", oldest first"
+      + (staleLoop[mode] ? "; previous run, until this run writes one" : "") + ")";
   }
   // Projection from the Skybox name suffix (3d_op_NN_<suffix>.mkv), unless the picker forces one.
   function autoProjection(name) {
@@ -583,6 +584,7 @@
       modifiedMs: Number(f.modifiedMs) || 0,
       ageMs: Number(f.ageMs) || 0,
       growing: isGrowing(f),
+      stale: !!f.stale,
       url: "/media/" + String(name).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/") + cacheBust(f)
     };
   }
@@ -632,7 +634,8 @@
     try { xrLog("loadIndex", { i: index, name: item.name, proj: proj, presenting: !!xrIsPresenting(), sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eLog) {}
     video.src = item.url;
     applyRate();
-    setLabel("[" + modeTag() + " · " + proj + "] " + (index + 1) + "/" + playlist.length + ": " + leafName(item.name));
+    setLabel("[" + modeTag() + " · " + proj + "] " + (index + 1) + "/" + playlist.length + ": " + leafName(item.name)
+      + (item.stale ? " · previous run (looping until this run's first segment)" : ""));
     renderFileList();
     syncShaderToggles();
     applyWorkingSeekIfNeeded(item);
@@ -678,8 +681,21 @@
       renderFileList();
     }
   }
+  // Slots the server marks stale are left over from an earlier run. Loop them until this run has a
+  // finished slot (one still being muxed would stall at the write head), then play only this run's.
+  var staleLoop = { hybrid: false, fisheye: false, flat: false };
+  function pickRun(list) {
+    var fresh = list.filter(function (e) { return !e.stale; });
+    var stale = list.filter(function (e) { return e.stale; });
+    if (!stale.length || fresh.some(function (e) { return !e.growing; })) return { list: fresh, stale: false };
+    return { list: stale, stale: true };
+  }
   function setPlaylists(files) {
-    MODES.forEach(function (m) { playlists[m] = buildPlaylist(files, FOLDERS[m]); });
+    MODES.forEach(function (m) {
+      var r = pickRun(buildPlaylist(files, FOLDERS[m]));
+      playlists[m] = r.list;
+      staleLoop[m] = r.stale;
+    });
     archivePlaylist = buildArchivePlaylist(files);
   }
   function fetchLists() {
@@ -732,6 +748,16 @@
     function step() {
       fetchLists().then(function (files) {
         setPlaylists(files);
+        // Still on the previous run's leftovers: no newer slot will come from them, so go straight to
+        // the next one (oldest first, wrapping) instead of waiting.
+        if (staleLoop[mode] && activePlaylist().length) {
+          var ls = activePlaylist();
+          var atS = -1;
+          ls.forEach(function (e, i) { if (e.name === curName) atS = i; });
+          advancing = false;
+          loadIndex(atS + 1, true);
+          return;
+        }
         var p = pick();
         tries++;
         // A slot takes ~60 s to write: wait it out rather than play it live (that stalls at the write head).
@@ -760,12 +786,16 @@
     }
     step();
   }
+  // Launch pressed before this run wrote its first segment: start it when it appears (emptyListPoll).
+  var waitingFirst = false;
   function initializePlayer() {
     var playlist = activePlaylist();
     if (!playlist.length) {
-      setLabel(emptyLabel());
+      waitingFirst = true;
+      setLabel("Waiting for the first " + MODE_LABELS[mode].toLowerCase() + " segment of this run…");
       return;
     }
+    waitingFirst = false;
     wantPlay = true;
     if (!video.src) loadIndex(index, true);
     else {
@@ -783,6 +813,17 @@
     setTimeout(refreshSphereShader, 800);
   }
   if (launchBtn) launchBtn.onclick = initializePlayer;
+  // An empty playlist (new run still standardizing / preparing) fills in by itself; if Launch was pressed,
+  // or playback was following the slots when the list emptied, playback starts on the first segment.
+  setInterval(function () {
+    if (advancing || activePlaylist().length) return;
+    fetchLists().then(function (files) {
+      if (advancing || activePlaylist().length || !buildPlaylist(files, FOLDERS[mode]).length) return;
+      var go = waitingFirst || (wantPlay && overlay.style.display === "none");
+      applyFiles(files);
+      if (go) initializePlayer();
+    }).catch(function () {});
+  }, 3000);
   MODES.forEach(function (m) {
     if (modeBtns[m]) modeBtns[m].onclick = function () { setMode(m, false); };
   });

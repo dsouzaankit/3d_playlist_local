@@ -249,6 +249,24 @@ Run sequence:
 #     First run: Windows Firewall asks to allow python.exe - allow it on private networks or the headset cannot connect.
 #   Page: playlists Hybrid / Fisheye / Flat = those folders, oldest segment first; Launch starts on the newest finished
 #     segment, and at each end it plays the next one written after it (waits while that slot is still being muxed).
+#     Leftovers of an earlier run: a slot older than its folder's running workflow (registeredUtc in
+#     %TEMP%\loopsegments-playlist-session.json, name = folder) is listed with stale=true. Until this run has a finished
+#     slot the playlist is just those, looped back-to-back (label "previous run"); then the next clip end switches to
+#     this run and they drop out. Before this, a new run still standardizing showed the previous run's last minute and
+#     then "Waiting for the next segment..." for 90 s per clip. No leftovers either: the list fills in by itself (checked
+#     every 3 s), and if Launch was pressed playback starts on the first segment.
+#     Compared with Loop Segments' XR page (ios_3d_loop_segments, ios/LoopSegments/Resources/xr-app.js):
+#       - New run: both start at slot 00 (its SegmentExporter minuteIndex = 0, slot = minuteIndex % 2; ffmpeg
+#         segment numbering starts at 0). Its Stop deletes loop/; a natural finish leaves op_00/op_01, so the next
+#         export's page loops the old contents too.
+#       - Old -> new: it plays by name (op_00 -> op_01 -> ...), so new content shows when the loop reaches a slot
+#         that was swapped in. Here the hybrid suffix changes with the route (_00_LR_180_FISHEYE vs _00_Full_SBS),
+#         so old vs new goes by mtime vs the workflow start, and the switch comes at the end of the clip playing when
+#         the new run's first slot finishes (up to ~60 s, never mid-clip) - never later than by name.
+#       - Slot being written: it never lists one (op_NN.staging.mp4, swapped in atomically); here ffmpeg writes the
+#         slot in place, so the page waits for it to finish (growing) and plays a snapshot copy.
+#       - Following the live run: it plays index + 1; here the next slot written after the current one (wait <= 90 s).
+#       - Media error: it drops back to the file list; here it skips ahead (up to 3 in a row).
 #     Projection Auto from the Skybox suffix: _LR_180_FISHEYE = fisheye 180 (equidistant circle per eye), _LR_180 = VR180
 #     half sphere, _Full_SBS / none = flat screen; the Projection picker overrides it. Enter AR = passthrough.
 #     Enter AR is 3D too (left dome on WebGL layer 1, right on layer 2, as in VR). The iOS page kept AR mono (its

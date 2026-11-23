@@ -17,7 +17,10 @@ Routes
   /xr                    the player page (?mode=hybrid|fisheye|flat picks the playlist)
   /xr-assets/<js>        aframe.min.js, xr-components.js, xr-app.js
   /xr-assets/lsclean     tiny 404 page without login (Quest helper tab for chrome://flags / history)
-  /xr_lists.json         {files: [{name: "hybrid/3d_op_00_LR_180.mkv", bytes, modified, modifiedMs, ageMs}]}
+  /xr_lists.json         {files: [{name: "hybrid/3d_op_00_LR_180.mkv", bytes, modified, modifiedMs, ageMs}],
+                         runStartMs, staleCount}: a slot older than its folder's running workflow (registered
+                         in SESSION_PATH, name = folder) is a leftover of an earlier run: "stale": true (the page
+                         loops those only until this run has a finished slot).
   /media/<folder>/<file> the segment, with HTTP Range (seeking), no-store. ?b=<bytes>&t=<mtime ms> (the
                          page's playlist entry) names the version: a finished one is served from a private
                          snapshot copy (see SNAP_DIR), since segment_wrap 2 truncates and rewrites that slot
@@ -114,6 +117,44 @@ def session_pids() -> list[int]:
         return [int(s.get("pid", 0)) for s in (data.get("sessions") or []) if isinstance(s, dict)]
     except (OSError, ValueError, TypeError):
         return []
+
+
+def _parse_utc(s: str) -> float | None:
+    """Epoch seconds of a .NET 'o' timestamp (2026-11-23T19:48:47.5822534Z: 7 fraction digits, which
+    datetime.fromisoformat rejects before Python 3.11)."""
+    m = re.match(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?$", str(s or "").strip())
+    if not m:
+        return None
+    y, mo, d, h, mi, se = (int(x) for x in m.groups()[:6])
+    frac = float("0." + m.group(7)) if m.group(7) else 0.0
+    tz = m.group(8) or "Z"
+    off = 0 if tz == "Z" else (1 if tz[0] == "+" else -1) * (int(tz[1:3]) * 3600 + int(tz[4:6]) * 60)
+    return _dt.datetime(y, mo, d, h, mi, se, tzinfo=_dt.timezone.utc).timestamp() + frac - off
+
+
+def run_starts() -> dict[str, float]:
+    """{folder: epoch s} when the running workflow for that folder registered (newest if several). A slot
+    older than that is left over from an earlier run - this run has not reached it yet, and segment_wrap 2
+    may never reuse it. The page loops those back-to-back while the new run is still standardizing /
+    preparing (it used to wait 90 s per clip for a "newer" one), and switches once this run has a finished slot."""
+    out: dict[str, float] = {}
+    try:
+        with open(SESSION_PATH, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return out
+    for s in (data.get("sessions") or []) if isinstance(data, dict) else []:
+        if not isinstance(s, dict) or s.get("name") not in FOLDERS:
+            continue
+        try:
+            if not pid_alive(int(s.get("pid", 0))):
+                continue
+        except (TypeError, ValueError):
+            continue
+        t = _parse_utc(s.get("registeredUtc"))
+        if t is not None and t > out.get(s["name"], 0):
+            out[s["name"]] = t
+    return out
 
 
 def open_shared(path: str):
@@ -320,6 +361,8 @@ class Handler(BaseHTTPRequestHandler):
     def _lists(self) -> dict:
         now = time.time()
         files = []
+        starts = run_starts()
+        stale: dict[str, int] = {}
         for folder in FOLDERS:
             d = os.path.join(self.server.opts.root, folder)
             try:
@@ -335,7 +378,11 @@ class Handler(BaseHTTPRequestHandler):
                     st, growing = file_state(e, now)
                 except OSError:
                     continue
+                is_stale = folder in starts and st.st_mtime < starts[folder]
+                if is_stale:
+                    stale[folder] = stale.get(folder, 0) + 1
                 files.append({
+                    "stale": is_stale,
                     "name": "%s/%s" % (folder, e.name),
                     "bytes": st.st_size,
                     "modified": _dt.datetime.fromtimestamp(st.st_mtime, _dt.timezone.utc).isoformat(),
@@ -343,7 +390,8 @@ class Handler(BaseHTTPRequestHandler):
                     "ageMs": max(0, int((now - st.st_mtime) * 1000)),
                     "growing": growing,
                 })
-        return {"root": self.server.opts.root, "now": int(now * 1000), "files": files}
+        return {"root": self.server.opts.root, "now": int(now * 1000), "files": files,
+                "runStartMs": {f: int(t * 1000) for f, t in starts.items()}, "staleCount": stale}
 
     def _page(self, query: dict, head_only: bool):
         opts = self.server.opts
