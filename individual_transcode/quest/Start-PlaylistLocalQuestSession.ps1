@@ -55,24 +55,24 @@ if ($CleanupWhenGone) {
     while ((Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue) -or @(Get-PlaylistQuestSessions).Count) { Start-Sleep -Seconds 3 }
     # A running companion does the same Quest cleanup at its own quit (and still uses the headset).
     if (@(Get-PlaylistQuestCompanionProcesses).Count) {
-        Write-PlaylistQuestLog 'Playlist session: workflow gone - Quest cleanup left to the running companion.'
+        Write-QuestLog 'Playlist session: workflow gone - Quest cleanup left to the running companion.'
         exit 0
     }
-    Write-PlaylistQuestLog 'Playlist session: workflow gone - Quest cleanup (tabs, history, sensor on, Wi-Fi off).'
-    $p = Start-PlaylistQuestHidden -Pwsh (Get-PlaylistQuestPwsh) -Script (Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1') -Arguments (Get-PlaylistQuestHistoryArgs)
+    Write-QuestLog 'Playlist session: workflow gone - Quest cleanup (tabs, history, sensor on, Wi-Fi off).'
+    $p = Start-QuestHiddenProcess -Pwsh (Get-QuestPwshExe) -Script (Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1') -Arguments (Get-PlaylistQuestHistoryArgs)
     if (-not $p.WaitForExit(180000)) { try { $p.Kill($true) } catch {} }
     $res = if (-not $p.HasExited) { 'timed out' } else { @{ 0 = 'done'; 1 = 'headset not on adb - the after-quit helper does it when it is back'; 3 = 'incomplete'; 4 = 'history delete postponed until the headset is worn' }[$p.ExitCode] }
-    Write-PlaylistQuestLog "Playlist session: Quest cleanup after the workflow - $res."
+    Write-QuestLog "Playlist session: Quest cleanup after the workflow - $res."
     exit 0
 }
 
 $cfg = Get-LoopSegmentsWindowsSettings
 if ($cfg.Contains('questPlaylistSession') -and $cfg.questPlaylistSession -eq $false) {
-    Write-PlaylistQuestLog 'Playlist session: off (questPlaylistSession=false).'
+    Write-QuestLog 'Playlist session: off (questPlaylistSession=false).'
     exit 0
 }
 if (-not (Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue)) {
-    Write-PlaylistQuestLog "Playlist session: workflow PID $WorkflowPid is not running - nothing started."
+    Write-QuestLog "Playlist session: workflow PID $WorkflowPid is not running - nothing started."
     exit 2
 }
 
@@ -82,7 +82,7 @@ try {
     $prev = Get-Content -LiteralPath $script:PlaylistShutdownPath -Raw -ErrorAction Stop | ConvertFrom-Json
     if (-not ($prev.state -eq 'running' -and (Get-Process -Id ([int]$prev.pid) -ErrorAction SilentlyContinue))) { Remove-Item -LiteralPath $script:PlaylistShutdownPath -Force }
 } catch {}
-Write-PlaylistQuestLog "Playlist session: $WorkflowName workflow started (PID $WorkflowPid) - sensor off + control page to the headset."
+Write-QuestLog "Playlist session: $WorkflowName workflow started (PID $WorkflowPid) - sensor off + control page to the headset."
 
 # 0. A previous quit's after-quit history helper (quest_tools' Invoke-QuestHistoryRetry.ps1) still
 #    waiting for the headset would run that old quit's cleanup once the headset is worn - mid-run: close
@@ -93,19 +93,19 @@ $stopped = Stop-QuestHistoryRetry
 if ($stopped.Stopped -or $stopped.Pending) {
     # The Wi-Fi AP bounce that helper was holding: this session's quit probes again.
     Remove-Item -LiteralPath (Join-Path $env:TEMP 'loopsegments-wifi-bounce-pending.json') -Force -ErrorAction SilentlyContinue
-    Write-PlaylistQuestLog "Playlist session: stopped the last quit's history helper ($($stopped.Stopped) process(es)); this session's quit deletes those entries."
+    Write-QuestLog "Playlist session: stopped the last quit's history helper ($($stopped.Stopped) process(es)); this session's quit deletes those entries."
 }
 
-$pwsh = Get-PlaylistQuestPwsh
+$pwsh = Get-QuestPwshExe
 $lanConfig = Get-PlaylistQuestLanConfigPath
 $url = Get-PlaylistQuestPhoneUrl -LanConfig $lanConfig
 
 # 1. Control page server (the companion's, if it runs, else ours until the workflow exits).
 $serverPid = Get-PlaylistQuestControlServerPid
 if ($serverPid) {
-    Write-PlaylistQuestLog "Playlist session: control page already served (PID $serverPid) - reused."
+    Write-QuestLog "Playlist session: control page already served (PID $serverPid) - reused."
 } elseif ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $false) {
-    Write-PlaylistQuestLog 'Playlist session: control page off (questControlPage=false) - not served, not opened.'
+    Write-QuestLog 'Playlist session: control page off (questControlPage=false) - not served, not opened.'
 } else {
     # A fresh session: Quest Browser ownership is noted again by the page open below.
     Remove-Item -LiteralPath (Join-Path $env:TEMP 'loopsegments-quest-browser-ours.json') -Force -ErrorAction SilentlyContinue
@@ -113,8 +113,8 @@ if ($serverPid) {
     try { if ([int]$cfg.questControlPort -gt 0) { $port = [int]$cfg.questControlPort } } catch {}
     $args1 = @('-Port', "$port", '-CompanionPid', "$WorkflowPid")
     if ($lanConfig) { $args1 += @('-LanConfig', $lanConfig) }
-    $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script (Join-Path $script:LsQuestDir 'Serve-QuestControlPage.ps1') -Arguments $args1
-    Write-PlaylistQuestLog "Playlist session: control page server started on port $port (PID $($p.Id), stops with the workflow)."
+    $p = Start-QuestHiddenProcess -Pwsh $pwsh -Script (Join-Path $script:LsQuestDir 'Serve-QuestControlPage.ps1') -Arguments $args1
+    Write-QuestLog "Playlist session: control page server started on port $port (PID $($p.Id), stops with the workflow)."
 }
 
 # Nothing is opened on the PC: the workflow window prints a sign-in link to the page
@@ -122,17 +122,17 @@ if ($serverPid) {
 
 # 1c. Cleanup when the workflow ends by itself: Quest tabs + history, sensor, Wi-Fi.
 if (-not @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" -ErrorAction SilentlyContinue | Where-Object { ([string]$_.CommandLine) -like '*Start-PlaylistLocalQuestSession.ps1*-CleanupWhenGone*' }).Count) {
-    [void](Start-PlaylistQuestHidden -Pwsh $pwsh -Script $PSCommandPath -Arguments @('-WorkflowPid', "$WorkflowPid", '-CleanupWhenGone'))
+    [void](Start-QuestHiddenProcess -Pwsh $pwsh -Script $PSCommandPath -Arguments @('-WorkflowPid', "$WorkflowPid", '-CleanupWhenGone'))
 }
 
 # 2. Keep-awake: sensor off while the workflow runs (once per workflow PID).
 $watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
 $have = @(Get-PlaylistQuestHelperProcesses -Pattern '*-KeepAwakeSession*' | Where-Object { ([string]$_.CommandLine) -match "-ParentPid\s+$WorkflowPid\b" })
 if ($have.Count) {
-    Write-PlaylistQuestLog "Playlist session: keep-awake already running for PID $WorkflowPid."
+    Write-QuestLog "Playlist session: keep-awake already running for PID $WorkflowPid."
 } else {
-    $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments @('-KeepAwakeSession', '-ParentPid', "$WorkflowPid")
-    Write-PlaylistQuestLog "Playlist session: keep-awake started (PID $($p.Id)): proximity sensor held off while the workflow runs."
+    $p = Start-QuestHiddenProcess -Pwsh $pwsh -Script $watch -Arguments @('-KeepAwakeSession', '-ParentPid', "$WorkflowPid")
+    Write-QuestLog "Playlist session: keep-awake started (PID $($p.Id)): proximity sensor held off while the workflow runs."
 }
 
 # 3. Push the control page to the headset browser (waits for an awake headset). Its -StatusFile
@@ -148,8 +148,8 @@ if (-not ($cfg.Contains('questControlPage') -and $cfg.questControlPage -eq $fals
     try { if ($null -ne $cfg.questPlaylistOpenWaitMinutes) { $wait = [int]$cfg.questPlaylistOpenWaitMinutes } } catch {}
     $args3 = @('-OpenControlPage', '-WaitMinutes', "$wait", '-ParentPid', "$WorkflowPid", '-StatusFile', $controlStatus)
     if ($url) { $args3 += @('-Url', $url) }
-    $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $watch -Arguments $args3
-    Write-PlaylistQuestLog ("Playlist session: opening the control page on the headset (PID {0}, waits {1} for it to be awake)." -f $p.Id, $(if ($wait -gt 0) { "up to $wait min" } else { 'until the workflow ends' }))
+    $p = Start-QuestHiddenProcess -Pwsh $pwsh -Script $watch -Arguments $args3
+    Write-QuestLog ("Playlist session: opening the control page on the headset (PID {0}, waits {1} for it to be awake)." -f $p.Id, $(if ($wait -gt 0) { "up to $wait min" } else { 'until the workflow ends' }))
 }
 
 # 4. The XR page once the headset is awake (after the control page open), unless the player is 'none'.
@@ -159,14 +159,14 @@ if ($player -eq 'xr') {
     $haveXr = @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $c = [string]$_.CommandLine; $c -like '*Start-PlaylistLocalQuestXr.ps1*' -and $c -match "-WorkflowPid\s+$WorkflowPid\b" })
     if ($haveXr.Count) {
-        Write-PlaylistQuestLog "Playlist session: XR page already queued for PID $WorkflowPid."
+        Write-QuestLog "Playlist session: XR page already queued for PID $WorkflowPid."
     } else {
         $argsXr = @('-WorkflowPid', "$WorkflowPid", '-WorkflowName', $WorkflowName)
         if ($controlStatus) { $argsXr += @('-ControlPageStatusFile', $controlStatus) }
-        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $xrScript -Arguments $argsXr
-        Write-PlaylistQuestLog "Playlist session: XR page queued (PID $($p.Id)): served from this PC, opened in Quest Browser once the headset is awake."
+        $p = Start-QuestHiddenProcess -Pwsh $pwsh -Script $xrScript -Arguments $argsXr
+        Write-QuestLog "Playlist session: XR page queued (PID $($p.Id)): served from this PC, opened in Quest Browser once the headset is awake."
     }
 } else {
-    Write-PlaylistQuestLog 'Playlist session: no player opened (questPlaylistPlayer=none).'
+    Write-QuestLog 'Playlist session: no player opened (questPlaylistPlayer=none).'
 }
 exit 0

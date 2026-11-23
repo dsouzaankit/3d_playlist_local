@@ -48,34 +48,13 @@ try {
     Initialize-QuestTools -AdbExe ([string]$qtCfg.questAdbExe) -Serial ([string]$qtCfg.questAdbSerial)
 } catch {}
 
-$script:PlaylistQuestLog = Join-Path $env:TEMP 'loopsegments-quest-lantab.log'
+# Logging (Write-QuestLog: %TEMP%\loopsegments-quest-lantab.log), the headset's serial
+# (Get-OnlineQuestSerial: questAdbSerial when set, only reads adb devices) and hidden helper processes
+# (Start-QuestHiddenProcess, Get-QuestPwshExe) are quest_tools'.
 # Workflow shells registered at workflow start: { sessions: [ { pid, name, started, startedUtc } ] }.
 $script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
 # Enter button progress, shown by the control page.
 $script:PlaylistShutdownPath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
-
-function Write-PlaylistQuestLog {
-    param([string] $Message)
-    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
-    try { Add-Content -LiteralPath $script:PlaylistQuestLog -Value $line -Encoding utf8 } catch {}
-    Write-Host "[quest] $Message"
-}
-
-function Get-PlaylistQuestPwsh {
-    if (Get-Command Get-LoopSegmentsPwshExe -ErrorAction SilentlyContinue) { try { return (Get-LoopSegmentsPwshExe) } catch {} }
-    return (Get-Process -Id $PID).Path
-}
-
-# Start a hidden pwsh -File <Script> <Arguments>; returns the process.
-function Start-PlaylistQuestHidden {
-    param([string] $Pwsh, [string] $Script, [string[]] $Arguments = @())
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $Pwsh
-    foreach ($a in @('-NoProfile', '-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Arguments) { [void]$psi.ArgumentList.Add([string]$a) }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    return [System.Diagnostics.Process]::Start($psi)
-}
 
 # The companion extension's lan_config.json (phone address the companion found), if any.
 function Get-PlaylistQuestLanConfigPath {
@@ -204,20 +183,6 @@ function Register-PlaylistQuestSession {
     $entry = [pscustomobject]@{ pid = $WorkflowPid; name = $WorkflowName; started = (Get-PlaylistQuestProcessStart -ProcessId $WorkflowPid)
         registeredUtc = [DateTime]::UtcNow.ToString('o'); shutdownScript = (Join-Path $PSScriptRoot 'Invoke-PlaylistLocalQuestShutdown.ps1') }
     try { @{ sessions = @($keep + $entry) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:PlaylistSessionPath -Encoding utf8 } catch {}
-}
-
-# ---- adb (Start-PlaylistLocalQuestXr.ps1, Close-PlaylistLocalQuestXrTabs.ps1) ----
-# quest_tools' Find-QuestAdbExe / Invoke-Adb / Get-QuestWakefulness ($script:Adb = Find-QuestAdbExe
-# first). Only reads `adb devices`: finding the headset (adb connect, mDNS, adb server restart) is left
-# to the keep-awake helper the session starts.
-
-# Online headset serial (questAdbSerial when set, else the first device), or $null.
-function Get-PlaylistQuestSerial {
-    $r = Invoke-Adb -Arguments @('devices')
-    $serials = @($r.Out -split "`r?`n" | Where-Object { $_ -match '^(\S+)\s+device\s*$' } | ForEach-Object { ($_ -split '\s+')[0] })
-    $want = ([string](Get-LoopSegmentsWindowsSettings).questAdbSerial).Trim()
-    if ($want) { return @($serials | Where-Object { $_ -eq $want } | Select-Object -First 1) }
-    return @($serials | Select-Object -First 1)
 }
 
 # ---- Quest XR page (individual_transcode\xr, Start-PlaylistLocalQuestXr.ps1) ----

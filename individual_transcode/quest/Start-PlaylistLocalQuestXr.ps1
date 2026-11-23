@@ -85,11 +85,11 @@ function Start-PlaylistXrServer {
     if (Test-PlaylistXrServer -Port $xr.Port) {
         $owner = ''
         try { $owner = " (PID $((Get-Content -LiteralPath $serverStatePath -Raw | ConvertFrom-Json).pid))" } catch {}
-        Write-PlaylistQuestLog "Playlist XR: page already served on port $($xr.Port)$owner - reused."
+        Write-QuestLog "Playlist XR: page already served on port $($xr.Port)$owner - reused."
         return $true
     }
     $py = Get-PlaylistXrPython
-    if (-not $py) { Write-PlaylistQuestLog 'Playlist XR: no Python (py_venv1, py -3 or python) - XR page not served.'; return $false }
+    if (-not $py) { Write-QuestLog 'Playlist XR: no Python (py_venv1, py -3 or python) - XR page not served.'; return $false }
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $py.Exe
     # Engine (xr-components.js, A-Frame): quest_tools\xr, the same checkout the quest helpers loaded.
@@ -103,52 +103,13 @@ function Start-PlaylistXrServer {
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 500
         if (Test-PlaylistXrServer -Port $xr.Port) {
-            Write-PlaylistQuestLog ("Playlist XR: page served on port {0} (PID {1}, fisheye background {2}; stops with the workflow)." -f $xr.Port, $p.Id, $(if ($bg) { $bg } else { 'black' }))
+            Write-QuestLog ("Playlist XR: page served on port {0} (PID {1}, fisheye background {2}; stops with the workflow)." -f $xr.Port, $p.Id, $(if ($bg) { $bg } else { 'black' }))
             return $true
         }
         if ($p.HasExited) { break }
     }
-    Write-PlaylistQuestLog "Playlist XR: server did not start on port $($xr.Port) (exit $(if ($p.HasExited) { $p.ExitCode } else { 'n/a' })) - see %TEMP%\playlist-xr-server.log."
+    Write-QuestLog "Playlist XR: server did not start on port $($xr.Port) (exit $(if ($p.HasExited) { $p.ExitCode } else { 'n/a' })) - see %TEMP%\playlist-xr-server.log."
     return $false
-}
-
-# This PC's IPv4 on the route to the headset (its adb ip:port serial), else on the default route.
-function Get-PlaylistXrPcAddress {
-    param([string] $Serial)
-    $target = if ($Serial -match '^(\d{1,3}(?:\.\d{1,3}){3}):\d+$') { $Matches[1] } else { '192.0.2.1' }
-    $u = [System.Net.Sockets.UdpClient]::new()
-    try {
-        $u.Connect($target, 9)
-        return ([System.Net.IPEndPoint]$u.Client.LocalEndPoint).Address.ToString()
-    } catch { return $null } finally { $u.Dispose() }
-}
-
-# Does the headset resolve $Name to $Ip? (ping prints "PING name (a.b.c.d)" even with no reply:
-# Windows Firewall drops ICMP echo by default.)
-function Test-PlaylistXrHeadsetResolves {
-    param([string] $Serial, [string] $Name, [string] $Ip)
-    $r = Invoke-Adb -Arguments @('-s', $Serial, 'shell', 'ping', '-c', '1', '-W', '2', $Name) -TimeoutSec 10
-    $text = [string]$r.Out + ' ' + [string]$r.Err
-    if ($text -match 'PING\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3})\)') {
-        $got = $Matches[1]
-        $mine = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.IPAddress })
-        if ($got -eq $Ip -or $mine -contains $got) { return $true }
-        Write-PlaylistQuestLog "Playlist XR: the headset resolves $Name to $got, not this PC ($Ip) - not used."
-        return $false
-    }
-    return $false
-}
-
-function Resolve-PlaylistXrHost {
-    param([string] $Serial, [string] $Ip)
-    $hm = $xr.HostMode
-    if ($hm -ieq 'ip') { return $Ip }
-    if ($hm -ine 'auto') { return $hm }
-    $pcName = ([string]$env:COMPUTERNAME).ToLowerInvariant()
-    foreach ($n in @("$pcName.local", $pcName)) {
-        if ($n -and $n -ne '.local' -and (Test-PlaylistXrHeadsetResolves -Serial $Serial -Name $n -Ip $Ip)) { return $n }
-    }
-    return $Ip
 }
 
 # quest_tools' Open-QuestPage, in this process: registered in the shared origin list (owner
@@ -161,7 +122,7 @@ function Invoke-PlaylistXrOpen {
     try {
         return [bool](Open-QuestPage -DeviceSerial $DeviceSerial -Url $Url -Owner $script:PlaylistXrOwner -HelperUrl "$Origin/xr-assets/lsclean")
     } catch {
-        Write-PlaylistQuestLog "Playlist XR: $($_.Exception.Message)"
+        Write-QuestLog "Playlist XR: $($_.Exception.Message)"
         return $false
     }
 }
@@ -173,7 +134,7 @@ if ($ServeOnly) { exit 0 }
 # ---- 2. wait: control page open finished, headset awake ----
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
-    Write-PlaylistQuestLog 'Playlist XR: adb not found (set questAdbExe) - page served, not opened on the headset.'
+    Write-QuestLog 'Playlist XR: adb not found (set questAdbExe) - page served, not opened on the headset.'
     exit 1
 }
 # quest_tools' Wait-QuestHeadsetAwake: until the workflow ends; only reads adb devices (-NoConnect:
@@ -189,10 +150,10 @@ if (-not $w.Serial) { exit 1 }
 $dev = $w.Serial
 
 # ---- 3. host ----
-$ip = Get-PlaylistXrPcAddress -Serial $dev
-if (-not $ip) { Write-PlaylistQuestLog 'Playlist XR: no IPv4 route to the headset - XR page not opened.'; exit 3 }
-$xrHost = Resolve-PlaylistXrHost -Serial $dev -Ip $ip
-Write-PlaylistQuestLog ("Playlist XR: page host {0} (questPlaylistXrHost={1}; PC IPv4 {2})." -f $xrHost, $xr.HostMode, $ip)
+$ip = Get-QuestPcAddress -DeviceSerial $dev -DefaultRoute
+if (-not $ip) { Write-QuestLog 'Playlist XR: no IPv4 route to the headset - XR page not opened.'; exit 3 }
+$xrHost = Resolve-QuestPcHost -DeviceSerial $dev -Ip $ip -Mode $xr.HostMode -Label 'Playlist XR: '
+Write-QuestLog ("Playlist XR: page host {0} (questPlaylistXrHost={1}; PC IPv4 {2})." -f $xrHost, $xr.HostMode, $ip)
 
 # ---- 4. open ----
 $hosts = @($xrHost)
@@ -202,10 +163,10 @@ foreach ($h in $hosts) {
     Add-PlaylistXrSavedOrigin -Origin $origin
     $url = "$origin/xr?mode=$mode"
     if (Invoke-PlaylistXrOpen -DeviceSerial $dev -Origin $origin -Url $url) {
-        Write-PlaylistQuestLog "Playlist XR: $url open on the headset (Enter AR = passthrough). chrome://flags insecure-origin covers $origin."
+        Write-QuestLog "Playlist XR: $url open on the headset (Enter AR = passthrough). chrome://flags insecure-origin covers $origin."
         exit 0
     }
-    Write-PlaylistQuestLog "Playlist XR: opening $url failed."
-    if (-not (Get-OnlineQuestSerial)) { Write-PlaylistQuestLog 'Playlist XR: headset gone from adb - not trying another host.'; break }
+    Write-QuestLog "Playlist XR: opening $url failed."
+    if (-not (Get-OnlineQuestSerial)) { Write-QuestLog 'Playlist XR: headset gone from adb - not trying another host.'; break }
 }
 exit 3

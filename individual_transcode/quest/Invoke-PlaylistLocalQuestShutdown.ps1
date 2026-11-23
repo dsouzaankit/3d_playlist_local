@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PlaylistLocalQuestCommon.ps1')
 
 $cfg = Get-LoopSegmentsWindowsSettings
-$pwsh = Get-PlaylistQuestPwsh
+$pwsh = Get-QuestPwshExe
 $watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
 $keyScript = Join-Path $script:LsQuestDir 'Send-PlaylistLocalSpaceKey.ps1'
 # The after-quit helper's pending delete (quest_tools lib\QuestHistoryRetry.ps1).
@@ -61,7 +61,7 @@ if (Test-Path -LiteralPath $script:PlaylistShutdownPath) {
     try {
         $prev = Get-Content -LiteralPath $script:PlaylistShutdownPath -Raw | ConvertFrom-Json
         if ($prev.state -eq 'running' -and [int]$prev.pid -ne $PID -and (Get-Process -Id ([int]$prev.pid) -ErrorAction SilentlyContinue)) {
-            Write-PlaylistQuestLog "Playlist stop: already running (PID $($prev.pid))."
+            Write-QuestLog "Playlist stop: already running (PID $($prev.pid))."
             exit 9
         }
     } catch {}
@@ -88,7 +88,7 @@ function Set-ShutdownStep {
     $s.result = $Result
     $s.level = $Level
     Save-ShutdownStatus
-    if ($Level -ne 'running') { Write-PlaylistQuestLog "Playlist stop: $Name - $Result" }
+    if ($Level -ne 'running') { Write-QuestLog "Playlist stop: $Name - $Result" }
 }
 
 # Runs the watcher (or -Script) hidden and waits. Returns @{ Code; Status } (Code -1 = timed out).
@@ -96,7 +96,7 @@ function Invoke-ShutdownWatch {
     param([string[]] $Arguments = @(), [int] $TimeoutSec = 60, [string] $Script = $watch)
     $statusFile = Join-Path $env:TEMP ('loopsegments-playlist-stop-{0}.txt' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
-        $p = Start-PlaylistQuestHidden -Pwsh $pwsh -Script $Script -Arguments (@($Arguments) + @('-StatusFile', $statusFile))
+        $p = Start-QuestHiddenProcess -Pwsh $pwsh -Script $Script -Arguments (@($Arguments) + @('-StatusFile', $statusFile))
         Set-HelperPriority $p
         if (-not $p.WaitForExit($TimeoutSec * 1000)) {
             try { $p.Kill($true) } catch {}
@@ -170,9 +170,9 @@ function Stop-WorkflowTree {
 # Quest log lines written since -Since (local time stamps "yyyy-MM-dd HH:mm:ss ...").
 function Get-QuestLogSince {
     param([DateTime] $Since)
-    if (-not (Test-Path -LiteralPath $script:PlaylistQuestLog)) { return @() }
+    if (-not (Test-Path -LiteralPath $script:QuestLogPath)) { return @() }
     $cut = $Since.ToString('yyyy-MM-dd HH:mm:ss')
-    return @(Get-Content -LiteralPath $script:PlaylistQuestLog -Tail 400 -ErrorAction SilentlyContinue |
+    return @(Get-Content -LiteralPath $script:QuestLogPath -Tail 400 -ErrorAction SilentlyContinue |
             Where-Object { $_.Length -ge 19 -and [string]::CompareOrdinal($_.Substring(0, 19), $cut) -ge 0 })
 }
 
@@ -182,7 +182,7 @@ function Test-PendingHistorySince {
 }
 
 $clickAt = (Get-Date).AddSeconds(-1)
-Write-PlaylistQuestLog 'Playlist stop: End session pressed on the Quest control page.'
+Write-QuestLog 'Playlist stop: End session pressed on the Quest control page.'
 Save-ShutdownStatus
 
 # ---- What is running ----
@@ -242,19 +242,19 @@ if (-not $targets.Count) {
             $lastTryAt = [DateTime]::UtcNow
             if ($k.ok) {
                 $who = @(@($k.consoles) | Where-Object { $_ -and $_.ok } | ForEach-Object { '{0} (pid {1})' -f $_.script, $_.pid }) -join ', '
-                Write-PlaylistQuestLog "Playlist stop: Enter sent on retry $quickTries ($who)."
+                Write-QuestLog "Playlist stop: Enter sent on retry $quickTries ($who)."
                 Set-ShutdownStep -Name 'Workflows' -Result "Enter sent to $who (retry $quickTries) - waiting for exit..." -Level running
                 # The 60 s resend counts from the Enter that got through.
                 $enterAt = [DateTime]::UtcNow
             } else {
-                Write-PlaylistQuestLog "Playlist stop: Enter retry $quickTries not sent ($($k.error))."
+                Write-QuestLog "Playlist stop: Enter retry $quickTries not sent ($($k.error))."
             }
             continue
         }
         if (-not $resent -and $elapsed -ge 60) {
             $resent = $true
             [void](Send-WorkflowEnter -Pids $alive)
-            Write-PlaylistQuestLog "Playlist stop: workflow still running after 60 s - Enter sent again (pid $($alive -join ', '))."
+            Write-QuestLog "Playlist stop: workflow still running after 60 s - Enter sent again (pid $($alive -join ', '))."
         }
         if ($limit -gt 0 -and $elapsed -ge $limit) {
             $n = 0
@@ -358,5 +358,5 @@ if (-not @(Get-PlaylistQuestCompanionProcesses).Count) {
 $script:Status.state = 'done'
 $script:Status.doneAt = (Get-Date -Format 'HH:mm:ss')
 Save-ShutdownStatus
-Write-PlaylistQuestLog 'Playlist stop: finished.'
+Write-QuestLog 'Playlist stop: finished.'
 exit 0

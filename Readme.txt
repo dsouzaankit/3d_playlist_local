@@ -234,7 +234,8 @@ Run sequence:
 #     Open-QuestPage (no sign-in; XR tab in front of the control page), then isSecureContext is read and, when false,
 #     the origin is added to Quest Browser chrome://flags #unsafely-treat-insecure-origin-as-secure (helper tab: this
 #     server's /xr-assets/lsclean) and the browser restarts once (WebXR needs a secure context).
-#   Host (the flag lists exact origins, so a new DHCP address means one more flag add + browser restart):
+#   Host (quest_tools Resolve-QuestPcHost; the flag lists exact origins, so a new DHCP address means one more flag add +
+#     browser restart):
 #     questPlaylistXrHost / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
 #     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;
 #     <name> = that name (e.g. a router DNS name). A name that then fails to load falls back to the IPv4 once.
