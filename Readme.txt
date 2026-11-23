@@ -236,10 +236,10 @@ Run sequence:
 #     Chroma keys the fisheye background (below). xr_debug.json keeps the page's debug ring (see the iOS repo's
 #     .cursor/skills/xr-debug).
 #   Push to the headset: quest\Start-PlaylistLocalQuestXr.ps1 (session step 4) waits for the control page open and an
-#     awake headset, then opens http://<host>:<port>/xr?mode=<workflow> with ios_3d_loop_segments'
-#     Watch-LoopSegmentsQuestLanTab.ps1 -Url <it> -NoLanLogin: control page tab, XR tab in front, then isSecureContext is
-#     read and, when false, the origin is added to Quest Browser chrome://flags #unsafely-treat-insecure-origin-as-secure
-#     and the browser restarts once (WebXR needs a secure context).
+#     awake headset, then opens http://<host>:<port>/xr?mode=<workflow> in-process with quest_tools'
+#     Open-QuestPage (no sign-in; XR tab in front of the control page), then isSecureContext is read and, when false,
+#     the origin is added to Quest Browser chrome://flags #unsafely-treat-insecure-origin-as-secure (helper tab: this
+#     server's /xr-assets/lsclean) and the browser restarts once (WebXR needs a secure context).
 #   Host (the flag lists exact origins, so a new DHCP address means one more flag add + browser restart):
 #     questPlaylistXrHost / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
 #     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;

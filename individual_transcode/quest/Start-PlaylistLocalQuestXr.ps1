@@ -20,12 +20,12 @@
          ip             - always the IPv4 on the route to the headset;
          <name>         - that host name (e.g. a router DNS name for a DHCP reservation).
        A name keeps the chrome://flags entry valid when DHCP hands the PC another address.
-    4. Opens http://<host>:<port>/xr?mode=<workflow> in a normal Quest Browser tab with
-       ios_3d_loop_segments' Watch-LoopSegmentsQuestLanTab.ps1 -Url ... -NoLanLogin: the control page
-       tab first, the XR page in front, then window.isSecureContext is read in the XR tab and, when
-       false, its origin is added to chrome://flags "unsafely-treat-insecure-origin-as-secure" and Quest
-       Browser restarts once (WebXR needs a secure context). A name the browser then fails to load
-       falls back to the IPv4 once.
+    4. Opens http://<host>:<port>/xr?mode=<workflow> in a normal Quest Browser tab, in this process,
+       with quest_tools' Open-QuestPage (no sign-in; an open tab on this origin is reused; the control
+       page opened in step 2 stays behind it): then window.isSecureContext is read in the XR tab and,
+       when false, its origin is added to chrome://flags "unsafely-treat-insecure-origin-as-secure"
+       (helper tab: this server's /xr-assets/lsclean) and Quest Browser restarts once (WebXR needs a
+       secure context). A name the browser then fails to load falls back to the IPv4 once.
 
   The opened origin goes into quest_tools' shared origin list (%TEMP%\quest-browser-origins.json,
   owner 3d_playlist_local-xr); every Quest cleanup (the workflow quit, End session, the Loop
@@ -150,14 +150,19 @@ function Resolve-PlaylistXrHost {
     return $Ip
 }
 
+# quest_tools' Open-QuestPage, in this process: registered in the shared origin list (owner
+# 3d_playlist_local-xr), a normal tab with no sign-in (an open tab on this origin reused), then
+# isSecureContext read and, when false, the origin added to chrome://flags (Quest Browser restarts)
+# and the page opened again. The flags helper tab uses this server's /xr-assets/lsclean (a small 404
+# page, no login).
 function Invoke-PlaylistXrOpen {
-    param([string] $Url)
-    $watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
-    # -NoLanLogin: no phone admin:<password>@ sign-in for this PC page. -Owner: its entry in quest_tools'
-    # shared origin list (the watcher registers the page there).
-    $p = Start-PlaylistQuestHidden -Pwsh (Get-PlaylistQuestPwsh) -Script $watch -Arguments @('-Url', $Url, '-NoLanLogin', '-WaitMinutes', '3', '-Owner', $script:PlaylistXrOwner)
-    if (-not $p.WaitForExit(420000)) { try { $p.Kill($true) } catch {}; return -1 }
-    return $p.ExitCode
+    param([string] $DeviceSerial, [string] $Origin, [string] $Url)
+    try {
+        return [bool](Open-QuestPage -DeviceSerial $DeviceSerial -Url $Url -Owner $script:PlaylistXrOwner -HelperUrl "$Origin/xr-assets/lsclean")
+    } catch {
+        Write-PlaylistQuestLog "Playlist XR: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 # ---- 1. server ----
@@ -170,32 +175,17 @@ if (-not $script:Adb) {
     Write-PlaylistQuestLog 'Playlist XR: adb not found (set questAdbExe) - page served, not opened on the headset.'
     exit 1
 }
-Write-PlaylistQuestLog 'Playlist XR: queued - opening the XR page when the headset is awake (until the workflow ends).'
-$lastState = ''
-$dev = $null
-while ($true) {
-    if (-not (Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue)) {
-        Write-PlaylistQuestLog 'Playlist XR: workflow gone before the headset was ready - XR page not opened.'
-        exit 1
+# quest_tools' Wait-QuestHeadsetAwake: until the workflow ends; only reads adb devices (-NoConnect:
+# finding the headset is left to the session's keep-awake helper).
+$w = Wait-QuestHeadsetAwake -ParentPid $WorkflowPid -PollSeconds $PollSeconds -Label 'Playlist XR: ' -NoConnect `
+    -ReadyLabel 'control page still opening' -Ready {
+        if (-not $ControlPageStatusFile) { return $true }
+        $s = ''
+        try { $s = (Get-Content -LiteralPath $ControlPageStatusFile -Raw -ErrorAction Stop).Trim() } catch {}
+        return ($s -in @('opened', 'failed', 'unreachable', 'cancelled'))
     }
-    try {
-        $settled = $true
-        if ($ControlPageStatusFile) {
-            $w = ''
-            try { $w = (Get-Content -LiteralPath $ControlPageStatusFile -Raw -ErrorAction Stop).Trim() } catch {}
-            $settled = $w -in @('opened', 'failed', 'unreachable', 'cancelled')
-        }
-        $dev = Get-PlaylistQuestSerial
-        $state = if ($dev) { Get-QuestWakefulness -DeviceSerial $dev } else { 'Unreachable' }
-        if (-not $state) { $state = 'Unknown' }
-        $label = "headset $state$(if ($dev) { " ($dev)" })$(if (-not $settled) { ', control page still opening' })"
-        if ($label -ne $lastState) { Write-PlaylistQuestLog "Playlist XR: $label"; $lastState = $label }
-        if ($state -eq 'Awake' -and $settled) { break }
-    } catch {
-        Write-PlaylistQuestLog "Playlist XR: $($_.Exception.Message)"
-    }
-    Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
-}
+if (-not $w.Serial) { exit 1 }
+$dev = $w.Serial
 
 # ---- 3. host ----
 $ip = Get-PlaylistXrPcAddress -Serial $dev
@@ -210,12 +200,11 @@ foreach ($h in $hosts) {
     $origin = "http://${h}:$($xr.Port)"
     Add-PlaylistXrSavedOrigin -Origin $origin
     $url = "$origin/xr?mode=$mode"
-    $code = Invoke-PlaylistXrOpen -Url $url
-    if ($code -eq 0) {
+    if (Invoke-PlaylistXrOpen -DeviceSerial $dev -Origin $origin -Url $url) {
         Write-PlaylistQuestLog "Playlist XR: $url open on the headset (Enter AR = passthrough). chrome://flags insecure-origin covers $origin."
         exit 0
     }
-    Write-PlaylistQuestLog ("Playlist XR: opening {0} failed ({1})." -f $url, $(switch ($code) { -1 { 'timed out' } 1 { 'headset not awake / on adb' } 2 { 'no adb' } default { "exit $code" } }))
-    if ($code -in @(1, 2)) { break }
+    Write-PlaylistQuestLog "Playlist XR: opening $url failed."
+    if (-not (Get-OnlineQuestSerial)) { Write-PlaylistQuestLog 'Playlist XR: headset gone from adb - not trying another host.'; break }
 }
 exit 3
