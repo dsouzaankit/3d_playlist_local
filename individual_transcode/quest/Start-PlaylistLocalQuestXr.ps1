@@ -41,7 +41,7 @@
 param(
     [Parameter(Mandatory)] [int] $WorkflowPid,
     [string] $WorkflowName = 'hybrid',
-    # Watch-LoopSegmentsQuestLanTab.ps1 -OpenControlPage -StatusFile; '' = control page not opened.
+    # quest_tools Invoke-QuestHeadset.ps1 -OpenControlPage -StatusFile; '' = control page not opened.
     [string] $ControlPageStatusFile = '',
     [int] $PollSeconds = 5,
     # Only serve the page (no headset steps): for opening it by hand.
@@ -134,7 +134,7 @@ if ($ServeOnly) { exit 0 }
 # ---- 2. wait: control page open finished, headset awake ----
 $script:Adb = Find-QuestAdbExe
 if (-not $script:Adb) {
-    Write-QuestLog 'Playlist XR: adb not found (set questAdbExe) - page served, not opened on the headset.'
+    Write-QuestLog 'Playlist XR: adb not found (set adbExe in quest_tools\quest-tools.json) - page served, not opened on the headset.'
     exit 1
 }
 # quest_tools' Wait-QuestHeadsetAwake: until the workflow ends; only reads adb devices (-NoConnect:

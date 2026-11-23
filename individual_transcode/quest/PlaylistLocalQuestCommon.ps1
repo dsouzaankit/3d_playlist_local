@@ -1,31 +1,15 @@
-# Shared by Start-PlaylistLocalQuestSession.ps1 (3d_playlist_local workflow start) and
-# Invoke-PlaylistLocalQuestShutdown.ps1 (Quest control page Enter button), both in this folder.
-# The Quest helpers they drive stay in ios_3d_loop_segments\windows\quest (adb discovery, Quest
-# Browser DevTools, control page server, settings): found at $env:LOOPSEGMENTS_IOS_REPO, else
-# <scripts root>\iOS apps\ios_3d_loop_segments (ALL_SCRIPTS_ROOT), then legacy P:. Dot-sourcing this loads its settings lib.
-# The generic headset layer (adb, finding the headset, sensor, Wi-Fi, Quest Browser DevTools) is the
-# quest_tools repo, which Loop Segments' scripts load too: $env:QUEST_TOOLS_REPO, else
-# <scripts root>\quest_tools, else a quest_tools folder next to this repo. Dot-sourcing this loads it
-# (Find-QuestAdbExe, Invoke-Adb, Get-QuestWakefulness, Write-QuestLog, ...).
+# Shared by this folder's Quest session scripts: Start-PlaylistLocalQuestSession.ps1 (workflow start),
+# Invoke-PlaylistLocalQuestShutdown.ps1 (the control page's End session), Start-PlaylistLocalQuestXr.ps1,
+# Close-PlaylistLocalQuestXrTabs.ps1. Everything playlist-specific lives here, in 3d_playlist_local;
+# the generic headset layer (adb, sensor, keep-awake, Wi-Fi, Quest Browser, the shared control page
+# host, the session cleanup) is the quest_tools repo: $env:QUEST_TOOLS_REPO, else
+# <ALL_SCRIPTS_ROOT>\quest_tools, else a quest_tools folder next to this repo, then P:\all_scripts.
+# Dot-sourcing this loads it (Find-QuestAdbExe, Invoke-Adb, Write-QuestLog, Register-QuestControlTiles, ...).
+#
+# Settings: playlist-quest.json next to this file (per PC, git-ignored; playlist-quest.example.json
+# lists the keys). A key missing there falls back to the older questPlaylist* / questControlPage keys
+# in ios_3d_loop_segments\windows\loop-segments-windows.json, then to the default.
 
-function Find-PlaylistQuestRepo {
-    foreach ($r in @($env:LOOPSEGMENTS_IOS_REPO, $(if ($env:ALL_SCRIPTS_ROOT) { Join-Path $env:ALL_SCRIPTS_ROOT 'iOS apps\ios_3d_loop_segments' }), 'P:\all_scripts\iOS apps\ios_3d_loop_segments')) {
-        if ([string]::IsNullOrWhiteSpace($r)) { continue }
-        if (Test-Path -LiteralPath (Join-Path $r 'windows\quest\Watch-LoopSegmentsQuestLanTab.ps1') -PathType Leaf) { return [System.IO.Path]::GetFullPath($r) }
-    }
-    return $null
-}
-
-$script:LsRepo = Find-PlaylistQuestRepo
-if (-not $script:LsRepo) { throw 'ios_3d_loop_segments not found (set LOOPSEGMENTS_IOS_REPO).' }
-# Child processes (control page server -> Enter run) find it the same way.
-$env:LOOPSEGMENTS_IOS_REPO = $script:LsRepo
-$script:LsWindowsDir = Join-Path $script:LsRepo 'windows'
-$script:LsQuestDir = Join-Path $script:LsWindowsDir 'quest'
-. (Join-Path $script:LsWindowsDir 'lib\LoopSegments-Windows.ps1')
-
-# Same order as Loop Segments' windows\quest\QuestToolsPath.ps1, so both use one checkout (shared
-# %TEMP% state, one adb server).
 function Find-PlaylistQuestToolsRepo {
     $candidates = [System.Collections.Generic.List[string]]::new()
     if ($env:QUEST_TOOLS_REPO) { $candidates.Add($env:QUEST_TOOLS_REPO) }
@@ -41,112 +25,99 @@ function Find-PlaylistQuestToolsRepo {
 
 $script:QuestToolsRepo = Find-PlaylistQuestToolsRepo
 if (-not $script:QuestToolsRepo) { throw 'quest_tools not found (set QUEST_TOOLS_REPO).' }
+# Child processes (helpers, the control page host) find the same checkout.
 $env:QUEST_TOOLS_REPO = $script:QuestToolsRepo
 . (Join-Path $script:QuestToolsRepo 'QuestTools.ps1')
-try {
-    $qtCfg = Get-LoopSegmentsWindowsSettings
-    Initialize-QuestTools -AdbExe ([string]$qtCfg.questAdbExe) -Serial ([string]$qtCfg.questAdbSerial)
-} catch {}
+try { Initialize-QuestToolsFromSettings } catch {}
+$script:PlaylistQuestHeadset = Join-Path $script:QuestToolsRepo 'Invoke-QuestHeadset.ps1'
 
-# Logging (Write-QuestLog: %TEMP%\loopsegments-quest-lantab.log), the headset's serial
-# (Get-OnlineQuestSerial: questAdbSerial when set, only reads adb devices) and hidden helper processes
-# (Start-QuestHiddenProcess, Get-QuestPwshExe) are quest_tools'.
-# Workflow shells registered at workflow start: { sessions: [ { pid, name, started, startedUtc } ] }.
-$script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
-# Enter button progress, shown by the control page.
-$script:PlaylistShutdownPath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
+# ---- Settings ----
 
-# The companion extension's lan_config.json (phone address the companion found), if any.
-function Get-PlaylistQuestLanConfigPath {
-    $p = Join-Path $env:LOCALAPPDATA 'pcloud_web_companion\extension\lan_config.json'
-    if (Test-Path -LiteralPath $p) { return $p }
-    return ''
+$script:PlaylistQuestSettingsPath = Join-Path $PSScriptRoot 'playlist-quest.json'
+$script:PlaylistQuestDefaults = [ordered]@{
+    session         = $true     # workflow start runs the Quest session at all
+    controlPage     = $true     # serve the control page tiles and open the page on the headset
+    openWaitMinutes = 0         # wait for an asleep / off-adb headset (0 = until the workflow ends)
+    player          = 'xr'      # 'xr' (the XR page) or 'none'
+    xrPort          = 18768
+    xrHost          = 'auto'    # 'auto' | 'ip' | a host name
+    historyOrigins  = @()       # extra origins the cleanup deletes ({pc} = this PC's address)
+    enterExitSec    = 180       # End session: seconds a workflow window gets after Enter (0 = never kill)
+}
+$script:PlaylistQuestLegacyKeys = [ordered]@{
+    session         = 'questPlaylistSession'
+    controlPage     = 'questControlPage'
+    openWaitMinutes = 'questPlaylistOpenWaitMinutes'
+    player          = 'questPlaylistPlayer'
+    xrPort          = 'questPlaylistXrPort'
+    xrHost          = 'questPlaylistXrHost'
+    historyOrigins  = 'questPlaylistHistoryOrigins'
+    enterExitSec    = 'questPlaylistEnterExitSec'
 }
 
-# Phone LAN page URL: lan_config.json, else phoneLanHost from loop-segments-windows.json. '' = none.
-function Get-PlaylistQuestPhoneUrl {
-    param([string] $LanConfig)
-    if ($LanConfig) {
-        try {
-            $c = Get-Content -LiteralPath $LanConfig -Raw | ConvertFrom-Json
-            $h = ([string]$c.phoneLanHost).Trim()
-            $pt = 8765
-            if ($c.PSObject.Properties['lanPort'] -and [int]$c.lanPort -gt 0) { $pt = [int]$c.lanPort }
-            if ($h) { return "http://${h}:${pt}/" }
-        } catch {}
+function Get-PlaylistQuestSettings {
+    $own = Read-QuestJsonFile -Path $script:PlaylistQuestSettingsPath
+    $legacy = Read-QuestJsonFile -Path (Get-QuestLegacySettingsPath)
+    $out = [ordered]@{}
+    foreach ($k in $script:PlaylistQuestDefaults.Keys) {
+        $v = $script:PlaylistQuestDefaults[$k]
+        $old = $script:PlaylistQuestLegacyKeys[$k]
+        if ($legacy -and $legacy.PSObject.Properties[$old] -and $null -ne $legacy.$old) { $v = $legacy.$old }
+        if ($own -and $own.PSObject.Properties[$k] -and $null -ne $own.$k) { $v = $own.$k }
+        $out[$k] = $v
     }
-    try {
-        $h = ([string](Get-LoopSegmentsWindowsSettings).phoneLanHost).Trim()
-        if ($h) { return "http://${h}:8765/" }
-    } catch {}
-    return ''
+    return $out
 }
 
-# PID of the running control page server (%TEMP%\loopsegments-quest-control.json), or $null.
-function Get-PlaylistQuestControlServerPid {
-    $state = Join-Path $env:TEMP 'loopsegments-quest-control.json'
-    if (-not (Test-Path -LiteralPath $state)) { return $null }
-    try {
-        $c = Get-Content -LiteralPath $state -Raw | ConvertFrom-Json
-        if (Get-Process -Id ([int]$c.pid) -ErrorAction SilentlyContinue) { return [int]$c.pid }
-    } catch {}
-    return $null
-}
+# ---- State ----
 
-# Watch-LoopSegmentsQuestLanTab.ps1 processes whose command line is -like $Pattern.
+# Workflow shells registered at workflow start: { sessions: [ { pid, name, started, registeredUtc, shutdownScript } ] }.
+$script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
+# End session progress, shown by the control page.
+$script:PlaylistShutdownPath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
+# This repo's tiles on the shared control page.
+$script:PlaylistControlTiles = Join-Path $PSScriptRoot 'PlaylistControlTiles.ps1'
+$script:PlaylistControlOwner = 'playlist'
+
+# quest_tools Invoke-QuestHeadset.ps1 helpers (and the Loop Segments watcher a pre-split run may have
+# left) whose command line is -like $Pattern.
 function Get-PlaylistQuestHelperProcesses {
     param([string] $Pattern = '*')
     return @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $c = [string]$_.CommandLine; $c -like '*Watch-LoopSegmentsQuestLanTab.ps1*' -and $c -like $Pattern })
+            Where-Object { $c = [string]$_.CommandLine; ($c -like '*Invoke-QuestHeadset.ps1*' -or $c -like '*Watch-LoopSegmentsQuestLanTab.ps1*') -and $c -like $Pattern })
 }
 
 function Get-PlaylistQuestProcessStart {
     param([int] $ProcessId)
-    # Ticks with a prefix: ConvertFrom-Json would turn an ISO date string into a DateTime.
-    try { return 't' + (Get-Process -Id $ProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { return '' }
-}
-
-# Loopback sign-in token for a PC browser tab (Serve-QuestControlPage.ps1 /pc?t=<token>; the workflow
-# window prints that link). Kept across workflow starts so tabs opened earlier stay signed in. The
-# hook (individual_transcode\Start-PlaylistQuestSession.ps1) writes the same file the same way.
-function Get-PlaylistQuestPcToken {
-    $path = Join-Path $env:TEMP 'loopsegments-quest-control-pctoken.txt'
-    try { $t = (Get-Content -LiteralPath $path -Raw -ErrorAction Stop).Trim(); if ($t -match '^[A-Za-z0-9]{32,}$') { return $t } } catch {}
-    $bytes = [byte[]]::new(24)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    $t = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-    Set-Content -LiteralPath $path -Value $t -Encoding ascii -NoNewline
-    return $t
+    return (Get-QuestProcessStartStamp -ProcessId $ProcessId)
 }
 
 # ---- Shared by the end-session run and the natural-end cleanup ----
 
-# Phone LAN URL for -ClearHistory (it needs one), else a placeholder: the watcher adds the control
-# page origin itself.
-function Get-PlaylistQuestHistoryUrl {
-    $url = Get-PlaylistQuestPhoneUrl -LanConfig (Get-PlaylistQuestLanConfigPath)
-    if ($url) { return $url }
-    $port = 18766
-    try { $p = [int](Get-LoopSegmentsWindowsSettings).questControlPort; if ($p -gt 0) { $port = $p } } catch {}
-    return "http://127.0.0.1:$port/"
+# historyOrigins with {pc} replaced by this PC's address.
+function Get-PlaylistQuestExtraOrigins {
+    $raw = @(@((Get-PlaylistQuestSettings).historyOrigins) | ForEach-Object { ([string]$_).Trim().TrimEnd('/') } | Where-Object { $_ })
+    if (-not $raw.Count) { return @() }
+    $pc = $null
+    try { $pc = Get-QuestPcAddress -DeviceSerial (Get-OnlineQuestSerial) -DefaultRoute } catch {}
+    return @($raw | ForEach-Object { if ($_ -like '*{pc}*') { if ($pc) { $_.Replace('{pc}', $pc) } } else { $_ } } | Where-Object { $_ })
 }
 
-# Watcher arguments for the Quest step (tabs, history, sensor on; Wi-Fi off per questWifiOffOnExit),
-# with the same settings as the companion's quit: questCloseLanTabsOnExit / questClearHistoryOnExit.
-# No origins of its own: the watcher covers every page in quest_tools' shared origin list (the XR
-# page is registered when it opens) and questPlaylistHistoryOrigins from the config.
-function Get-PlaylistQuestHistoryArgs {
-    $cfg = Get-LoopSegmentsWindowsSettings
+# quest_tools Invoke-QuestHeadset.ps1 -Cleanup arguments (tabs, history, sensor on; Wi-Fi off and the
+# tab / history choices per quest-tools.json). It covers every page in quest_tools' shared origin
+# list (the control page and the XR page register theirs when they open) plus historyOrigins. The
+# after-quit helper stops if the Loop Segments companion starts (its own quit does the same cleanup).
+function Get-PlaylistQuestCleanupArgs {
     Sync-PlaylistXrOriginsToShared
-    $a = @('-Url', (Get-PlaylistQuestHistoryUrl), '-ClearHistory')
-    if (-not ($cfg.Contains('questCloseLanTabsOnExit') -and $cfg.questCloseLanTabsOnExit -eq $false)) { $a += '-CloseLanTabs' }
-    if ($cfg.Contains('questClearHistoryOnExit') -and $cfg.questClearHistoryOnExit -eq $false) { $a += '-SkipHistoryClear' }
-    $a += '-EnableProximityAfter'
+    $a = @('-Cleanup', '-StopIfCommandLine', 'Run-PCloudWebCompanion\.ps1|_run_chromium\.ps1')
+    $extra = @(Get-PlaylistQuestExtraOrigins)
+    if ($extra.Count) { $a += @('-ExtraOrigins', ($extra -join ',')) }
     return $a
 }
 
-# The running companion: its launcher shell or its Chromium (profile ...\pcloud_web_companion\
-# chromium-profile, main process). Not the REST log sink / exit watchdog, which can outlive it.
+# The running Loop Segments companion: its launcher shell or its Chromium (profile
+# ...\pcloud_web_companion\chromium-profile, main process). Not the REST log sink / exit watchdog,
+# which can outlive it. End session quits it, so its own quit cleans up the Quest.
 function Get-PlaylistQuestCompanionProcesses {
     return @(Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe' OR Name = 'powershell.exe' OR Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
             Where-Object {
@@ -178,7 +149,7 @@ function Get-PlaylistQuestSessions {
 function Register-PlaylistQuestSession {
     param([int] $WorkflowPid, [string] $WorkflowName)
     $keep = @(Get-PlaylistQuestSessions | Where-Object { [int]$_.pid -ne $WorkflowPid })
-    # shutdownScript: the control page's Enter button runs this workflow's copy (media folders keep
+    # shutdownScript: the control page's End session runs this workflow's copy (media folders keep
     # their own synced 3d_playlist_local).
     $entry = [pscustomobject]@{ pid = $WorkflowPid; name = $WorkflowName; started = (Get-PlaylistQuestProcessStart -ProcessId $WorkflowPid)
         registeredUtc = [DateTime]::UtcNow.ToString('o'); shutdownScript = (Join-Path $PSScriptRoot 'Invoke-PlaylistLocalQuestShutdown.ps1') }
@@ -188,28 +159,24 @@ function Register-PlaylistQuestSession {
 # ---- Quest XR page (individual_transcode\xr, Start-PlaylistLocalQuestXr.ps1) ----
 
 # What the workflow start opens on the headset: 'xr' (default: the XR page in Quest Browser, served
-# from this PC) or 'none'. $env:PLAYLIST_QUEST_PLAYER, else questPlaylistPlayer in
-# loop-segments-windows.json. Anything else (e.g. a leftover 'skybox': SKYBOX VR Player as the player
-# was removed 2026-11-23) = 'xr'.
+# from this PC) or 'none'. $env:PLAYLIST_QUEST_PLAYER, else the player setting. Anything else (e.g. a
+# leftover 'skybox': SKYBOX VR Player as the player was removed 2026-11-23) = 'xr'.
 function Get-PlaylistQuestPlayer {
     $raw = [string]$env:PLAYLIST_QUEST_PLAYER
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-        $cfg = Get-LoopSegmentsWindowsSettings
-        if ($cfg.Contains('questPlaylistPlayer') -and $cfg.questPlaylistPlayer) { $raw = [string]$cfg.questPlaylistPlayer }
-    }
+    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [string](Get-PlaylistQuestSettings).player }
     if (([string]$raw).Trim().ToLowerInvariant() -eq 'none') { return 'none' }
     return 'xr'
 }
 
-# Port (questPlaylistXrPort, default 18768 = control page 18766 + 2) and host mode
-# ($env:PLAYLIST_XR_HOST, else questPlaylistXrHost): 'auto' (default) = this PC's name when the headset
-# resolves it to this PC, else its LAN IPv4; 'ip' = always the IPv4; anything else = that host name.
+# Port (xrPort, default 18768 = control page 18766 + 2) and host mode ($env:PLAYLIST_XR_HOST, else
+# xrHost): 'auto' (default) = this PC's name when the headset resolves it to this PC, else its LAN
+# IPv4; 'ip' = always the IPv4; anything else = that host name.
 function Get-PlaylistXrSettings {
-    $cfg = Get-LoopSegmentsWindowsSettings
+    $cfg = Get-PlaylistQuestSettings
     $port = 18768
-    try { if ($cfg.Contains('questPlaylistXrPort') -and [int]$cfg.questPlaylistXrPort -gt 0) { $port = [int]$cfg.questPlaylistXrPort } } catch {}
+    try { if ([int]$cfg.xrPort -gt 0) { $port = [int]$cfg.xrPort } } catch {}
     $hostMode = [string]$env:PLAYLIST_XR_HOST
-    if ([string]::IsNullOrWhiteSpace($hostMode) -and $cfg.Contains('questPlaylistXrHost')) { $hostMode = [string]$cfg.questPlaylistXrHost }
+    if ([string]::IsNullOrWhiteSpace($hostMode)) { $hostMode = [string]$cfg.xrHost }
     if ([string]::IsNullOrWhiteSpace($hostMode)) { $hostMode = 'auto' }
     return [pscustomobject]@{ Port = $port; HostMode = $hostMode.Trim() }
 }

@@ -166,12 +166,12 @@ Run sequence:
 # Deadline: -BatchTimeoutSec / -WorkflowTimeoutSec / -WorkflowDeadlineUtc still tick while export is paused (exit 124).
 # Messages: [leaf-export] Paused/Resumed N DLNA export ffmpeg process(es)...
 #
-# Quest headset (ios_3d_loop_segments, optional): hybrid / fisheye batch and the flat orchestrator call
+# Quest headset (optional; needs quest_tools): hybrid / fisheye batch and the flat orchestrator call
 #   individual_transcode\Start-PlaylistQuestSession.ps1 at start (not -DryRun): in the background it holds the
 #   Quest proximity sensor off and opens the Quest control page in Quest Browser; this window prints a sign-in
 #   link to the same page for the PC (optional, nothing opens there). Once the headset is awake and the page is open,
 #   the XR player page (below) opens in front: served from this PC and opened in Quest Browser next to the control
-#   page. questPlaylistPlayer (ios_3d_loop_segments\windows\loop-segments-windows.json) or $env:PLAYLIST_QUEST_PLAYER =
+#   page. "player": "none" (individual_transcode\quest\playlist-quest.json) or $env:PLAYLIST_QUEST_PLAYER =
 #   none skips it. (SKYBOX VR Player as the Quest player - "skybox" - was removed 2026-11-23: WebXR in Quest Browser
 #   replaced it, and SKYBOX reset its passthrough on every launch. A leftover "skybox" opens the XR page.)
 #   Every quit (End session or natural end) first closes the XR page's Quest Browser tabs
@@ -184,23 +184,24 @@ Run sequence:
 #   (its own quit cleans up the Quest, L: and the phone) - or, without the companion, the Quest cleanup itself
 #   (tabs, history, sensor on, Wi-Fi off). Quest history is deleted once either way. End session runs its helpers at
 #   above-normal priority (a fisheye run slowed them down to timeouts). Phone not answering at cleanup: the helper page
-#   that clears Quest Browser's Recently closed list is served from this PC (port questControlPort + 1, default 18767).
+#   that clears Quest Browser's Recently closed list is served from this PC (port controlPort + 1, default 18767).
 #   Headset not worn at quit: quest_tools' after-quit history helper (Invoke-QuestHistoryRetry.ps1) finishes that cleanup when it is next worn.
 #   A new workflow start stops any such helper first (log: "stopped the last quit's history helper"), so it cannot
 #   close the new run's control page / Quest Browser or switch Wi-Fi off mid-run; the new run's quit cleans instead.
-#   Off: $env:PLAYLIST_QUEST_SESSION='0'. Repo path: $env:LOOPSEGMENTS_IOS_REPO.
-#   Details: ios_3d_loop_segments\windows\quest\README.md (3d_playlist_local workflow session).
-#   Why the control page (windows\quest\Serve-QuestControlPage.ps1) is not in this repo: it is one page shared
-#     with the Loop Segments companion (one server on questControlPort 18766, one PC sign-in token, one
-#     loop-segments-windows.json, one log), and it is built on Loop Segments pieces (lib\LoopSegments-Windows.ps1,
-#     the companion's lan_config.json, the PC <-> phone LAN probe, the SKYBOX buttons). Two copies would fight over
-#     the port and the Quest Browser tab. So some playlist-only pieces live there too (Send-PlaylistLocalSpaceKey.ps1,
-#     the PC -> Quest LAN test that sets this repo's segment bitrate): change those in ios_3d_loop_segments.
-#     Generic parts (e.g. the speed test) could move to quest_tools; the page itself would still need Loop Segments.
-#   Generic headset layer (adb, finding the headset, proximity sensor, Wi-Fi off, Quest Browser DevTools, SKYBOX
-#   database): the quest_tools repo, P:\all_scripts\quest_tools ($env:QUEST_TOOLS_REPO, else <scripts root>\quest_tools,
+#   Off: $env:PLAYLIST_QUEST_SESSION='0', or "session": false in individual_transcode\quest\playlist-quest.json.
+#   Details: individual_transcode\quest\README.md (workflow session, Session Control tile, End session, settings).
+#   Where things live: every playlist piece is in this repo, individual_transcode\quest\ (session start, End
+#     session, the Space / Enter key sender, its control page tiles PlaylistControlTiles.ps1, its settings
+#     playlist-quest.json; the segment bitrate rule in individual_transcode\Get-QuestLanSegmentBitrate.ps1).
+#     The Quest control page itself is one shared page hosted by quest_tools (QuestControlHost.ps1, port 18766):
+#     this repo adds its Session Control tile while a workflow runs, the Loop Segments companion adds its SKYBOX /
+#     phone LAN tiles while it runs, one page and one Quest tab either way. The Loop Segments repo is not needed;
+#     its older loop-segments-windows.json questPlaylist* keys are still read when playlist-quest.json lacks a key.
+#   Generic headset layer (adb, finding the headset, proximity sensor, keep-awake, Wi-Fi off, Quest Browser
+#   DevTools, the control page host, the end-of-session cleanup, SKYBOX database): the quest_tools repo, P:\all_scripts\quest_tools ($env:QUEST_TOOLS_REPO, else <scripts root>\quest_tools,
 #   else a quest_tools folder next to this repo), loaded by both this repo's quest\ scripts and Loop Segments'. One
-#   checkout for both. Setup (adb, developer mode, wireless adb) and adb trouble: quest_tools\README.md.
+#   checkout for both; its settings (adb, controlPort, close tabs / clear history / Wi-Fi off at the end) are
+#   quest_tools\quest-tools.json. Setup (adb, developer mode, wireless adb) and adb trouble: quest_tools\README.md.
 #   By hand: pwsh -File P:\all_scripts\quest_tools\Invoke-QuestHeadset.ps1 (read-only status; -ResetAdb, -EnableProximity, ...).
 #   adb hangs (adb devices / connect / even kill-server never return, PowerShell windows freeze with them; headset
 #   still on USB or listed by mDNS): the adb server is stuck (seen: two adb.exe running). The session's keep-awake
@@ -215,7 +216,7 @@ Run sequence:
 #   quest_tools\xr is the one editable copy (see quest_tools\README.md "XR player engine"; Loop Segments bundles a copy
 #   generated by quest_tools\xr\Sync-QuestXrEngine.ps1). serve_xr_page.py serves it from there (--engine-dir, else
 #   found like quest_tools itself). Do not upgrade A-Frame casually.
-#   Server: xr\serve_xr_page.py (stdlib Python; py_venv1) on port questPlaylistXrPort (default 18768), all interfaces,
+#   Server: xr\serve_xr_page.py (stdlib Python; py_venv1) on port xrPort (playlist-quest.json; older questPlaylistXrPort; default 18768), all interfaces,
 #     read-only, no login. Serves /xr, the A-Frame assets and the DLNA segments straight from the store
 #     %APPDATA%\3d_playlist_local\{hybrid,fisheye,flat}\3d_op_NN[_Suffix].mkv (HTTP Range; opened with full share flags
 #     so the quit rename and the wrap-2 rewrite still work while the headset streams). Stops when the workflow (and every
@@ -253,7 +254,7 @@ Run sequence:
 #     server's /xr-assets/lsclean) and the browser restarts once (WebXR needs a secure context).
 #   Host (quest_tools Resolve-QuestPcHost; the flag lists exact origins, so a new DHCP address means one more flag add +
 #     browser restart):
-#     questPlaylistXrHost / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
+#     xrHost (playlist-quest.json; older questPlaylistXrHost) / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
 #     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;
 #     <name> = that name (e.g. a router DNS name). A name that then fails to load falls back to the IPv4 once.
 #     Most reliable static option: a DHCP reservation for this PC in the router (the IPv4 then never changes).

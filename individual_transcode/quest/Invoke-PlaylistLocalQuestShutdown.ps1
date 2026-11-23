@@ -4,10 +4,10 @@
   (3d_playlist_local workflows, the Loop Segments PC companion) and clean up the Quest once.
 
 .DESCRIPTION
-  Lives in 3d_playlist_local\individual_transcode\quest; drives the Quest helpers in
-  ios_3d_loop_segments\windows\quest. Started by that repo's Serve-QuestControlPage.ps1
-  (POST /playlist/enter) fully detached from it (the companion's quit kills the server and
-  everything it started). One run at a time. Every step is skipped when its part is not running.
+  Lives in 3d_playlist_local\individual_transcode\quest; drives the generic headset helpers in
+  quest_tools (Invoke-QuestHeadset.ps1). Started by this folder's PlaylistControlTiles.ps1 on the
+  shared control page (POST /playlist/enter), fully detached from the page host (it stops when no
+  workflow or companion is left). One run at a time. Every step is skipped when its part is not running.
   Progress: %TEMP%\loopsegments-playlist-shutdown.json (shown on the control page).
 
     0. stop the workflows' keep-awake, a pending page open and the natural-end cleanup helper
@@ -16,17 +16,17 @@
        nothing streams the segments while the workflows' quit renames them;
     2. 3d_playlist_local workflows: Enter in every workflow window (key helper allowed 45 s; not
        delivered = tried again every 5 s, up to 3 times), wait for each to exit (its own quit
-       cleanup), Enter again after 60 s, kill after questPlaylistEnterExitSec (180 s);
+       cleanup), Enter again after 60 s, kill after enterExitSec (playlist-quest.json, 180 s);
     3. (nothing opens on the PC any more: a control page tab you opened there closes itself);
     4. the companion (launcher shell or its Chromium running):
        a. close its Chromium gracefully (taskkill without /F: profile saved and synced), force after
           30 s: its normal quit runs (Quest tabs / history / SKYBOX / sensor / Wi-Fi off, rclone L:,
           Keep Alive, iPhone Home: the Loop Segments app). Its tab and history step covers every
-          page in quest_tools' shared origin list (the XR page included) and questPlaylistHistoryOrigins;
+          page in quest_tools' shared origin list (the control page and the XR page included);
        b. wait (<= 180 s) for its Quest step in the log ("Cleanup: finished") or the after-quit
           helper's pending file; neither (crashed, force-killed, no phone URL): step 5 runs instead;
-    5. Quest step when the companion did not do it: -ClearHistory (tabs per questCloseLanTabsOnExit,
-       history per questClearHistoryOnExit, sensor on, Wi-Fi off per questWifiOffOnExit), then
+    5. Quest step when the companion did not do it: Invoke-QuestHeadset.ps1 -Cleanup (tabs per closeTabsOnExit,
+       history per clearHistoryOnExit, sensor on, Wi-Fi off per wifiOffOnExit in quest-tools.json), then
        Wi-Fi off once more unless the history delete was handed to the after-quit helper or the
        cleanup's log already says it switched Wi-Fi off;
     This run and every helper it starts run at AboveNormal priority (a fisheye run can starve them).
@@ -48,10 +48,11 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'PlaylistLocalQuestCommon.ps1')
 
-$cfg = Get-LoopSegmentsWindowsSettings
+$cfg = Get-PlaylistQuestSettings
+$qtCfg = Get-QuestToolsSettings
 $pwsh = Get-QuestPwshExe
-$watch = Join-Path $script:LsQuestDir 'Watch-LoopSegmentsQuestLanTab.ps1'
-$keyScript = Join-Path $script:LsQuestDir 'Send-PlaylistLocalSpaceKey.ps1'
+$watch = $script:PlaylistQuestHeadset
+$keyScript = Join-Path $PSScriptRoot 'Send-PlaylistLocalSpaceKey.ps1'
 # The after-quit helper's pending delete (quest_tools lib\QuestHistoryRetry.ps1).
 $pendingHistoryPath = $script:QuestHistoryPendingPath
 
@@ -91,7 +92,7 @@ function Set-ShutdownStep {
     if ($Level -ne 'running') { Write-QuestLog "Playlist stop: $Name - $Result" }
 }
 
-# Runs the watcher (or -Script) hidden and waits. Returns @{ Code; Status } (Code -1 = timed out).
+# Runs quest_tools Invoke-QuestHeadset.ps1 (or -Script) hidden and waits. Returns @{ Code; Status } (Code -1 = timed out).
 function Invoke-ShutdownWatch {
     param([string[]] $Arguments = @(), [int] $TimeoutSec = 60, [string] $Script = $watch)
     $statusFile = Join-Path $env:TEMP ('loopsegments-playlist-stop-{0}.txt' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -155,7 +156,7 @@ function Stop-WorkflowTree {
             # A reused parent PID: the child must be younger than the parent.
             if ($c.CreationDate -and $cur.CreationDate -and $c.CreationDate -lt $cur.CreationDate) { continue }
             $ccl = [string]$c.CommandLine
-            if ($ccl -like '*\windows\quest\*' -or $ccl -like '*PlaylistLocalQuest*') { continue }
+            if ($ccl -like '*\windows\quest\*' -or $ccl -like '*quest_tools*' -or $ccl -like '*PlaylistLocalQuest*') { continue }
             if ([int]$c.ProcessId -eq $PID) { continue }
             $queue.Enqueue($c)
         }
@@ -226,7 +227,7 @@ if (-not $targets.Count) {
     if (-not $k.ok) { $who = "Enter not sent ($($k.error))" }
     Set-ShutdownStep -Name 'Workflows' -Result "Enter sent to $who - waiting for exit..." -Level running
     $limit = 180
-    try { if ($null -ne $cfg.questPlaylistEnterExitSec) { $limit = [int]$cfg.questPlaylistEnterExitSec } } catch {}
+    try { if ($null -ne $cfg.enterExitSec) { $limit = [int]$cfg.enterExitSec } } catch {}
     $resent = $false
     # Enter not delivered (helper timed out / failed): try again after 5 s, up to 3 times, before
     # the usual 60 s resend - else the window just waits a minute for a key it never got.
@@ -263,7 +264,7 @@ if (-not $targets.Count) {
             break
         }
         if ($limit -le 0 -and $elapsed -ge 600) {
-            Set-ShutdownStep -Name 'Workflows' -Result ("still running (pid {0}); questPlaylistEnterExitSec=0 never kills it" -f ($alive -join ', ')) -Level warn
+            Set-ShutdownStep -Name 'Workflows' -Result ("still running (pid {0}); enterExitSec=0 never kills it" -f ($alive -join ', ')) -Level warn
             break
         }
         Start-Sleep -Seconds 2
@@ -276,9 +277,8 @@ $companion = @(Get-PlaylistQuestCompanionProcesses)
 if (-not $companion.Count) {
     Set-ShutdownStep -Name 'Companion' -Result 'not running' -Level skip
 } else {
-    # The XR page and questPlaylistHistoryOrigins need no step of their own: the companion's quit
-    # cleans up every page in quest_tools' shared origin list (the XR page is registered when it
-    # opens) and the configured origins.
+    # The XR page and the control page need no step of their own: the companion's quit cleans up
+    # every page in quest_tools' shared origin list (each is registered when it opens).
     Sync-PlaylistXrOriginsToShared
     # a. Graceful close of its Chromium -> its normal quit.
     Set-ShutdownStep -Name 'Companion' -Result 'closing its Chromium (its quit cleans up the Quest, L:, phone)...' -Level running
@@ -323,7 +323,7 @@ if ($questDoneBy) {
 } else {
     Set-ShutdownStep -Name 'Quest cleanup' -Result 'tabs, history, sensor...' -Level running
     $cleanAt = (Get-Date).AddSeconds(-1)
-    $h = Invoke-ShutdownWatch -Arguments (Get-PlaylistQuestHistoryArgs) -TimeoutSec 120
+    $h = Invoke-ShutdownWatch -Arguments (Get-PlaylistQuestCleanupArgs) -TimeoutSec 120
     switch ($h.Code) {
         0 { Set-ShutdownStep -Name 'Quest cleanup' -Result 'tabs closed, history entries deleted, sensor back on' }
         4 { Set-ShutdownStep -Name 'Quest cleanup' -Result 'tabs closed, sensor back on; history delete postponed until the headset is worn' -Level warn }
@@ -331,8 +331,8 @@ if ($questDoneBy) {
         -1 { Set-ShutdownStep -Name 'Quest cleanup' -Result 'timed out' -Level bad }
         default { Set-ShutdownStep -Name 'Quest cleanup' -Result "incomplete (exit $($h.Code)); see %TEMP%\loopsegments-quest-lantab.log" -Level bad }
     }
-    if ($cfg.Contains('questWifiOffOnExit') -and $cfg.questWifiOffOnExit -eq $false) {
-        Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'left on (questWifiOffOnExit=false)' -Level skip
+    if ($qtCfg.wifiOffOnExit -eq $false) {
+        Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'left on (wifiOffOnExit=false)' -Level skip
     } elseif ($h.Code -eq 4 -or $h.Code -eq 1) {
         Set-ShutdownStep -Name 'Quest Wi-Fi' -Result 'left on: the after-quit helper needs it and switches it off after the history delete' -Level warn
     } elseif (@(Get-QuestLogSince -Since $cleanAt | Where-Object { $_ -match " Wi-Fi: switched the headset's Wi-Fi off" }).Count) {

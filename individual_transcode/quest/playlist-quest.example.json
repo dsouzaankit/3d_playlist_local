@@ -1,0 +1,10 @@
+{
+  "session": true,
+  "controlPage": true,
+  "openWaitMinutes": 0,
+  "player": "xr",
+  "xrPort": 18768,
+  "xrHost": "auto",
+  "historyOrigins": [],
+  "enterExitSec": 180
+}

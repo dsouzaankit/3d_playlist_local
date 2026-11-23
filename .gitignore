@@ -43,3 +43,6 @@ individual_transcode/_test_std_resolve.ps1
 
 # Large Cursor chat dumps (not source)
 ai/*.json
+
+# Per-PC Quest session settings (playlist-quest.example.json lists the keys)
+individual_transcode/quest/playlist-quest.json
