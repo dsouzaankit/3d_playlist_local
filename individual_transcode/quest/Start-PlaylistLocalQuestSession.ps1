@@ -41,6 +41,8 @@
 param(
     [Parameter(Mandatory)] [int] $WorkflowPid,
     [string] $WorkflowName = '',
+    # Workflow deadline (ISO 'o' UTC, empty = none): stored with the session for the XR page's countdown.
+    [string] $DeadlineUtc = '',
     # Internal: wait until no registered workflow runs any more, then run the Quest cleanup (tabs,
     # history, sensor on, Wi-Fi off per wifiOffOnExit). The End session button stops this
     # helper and does that itself.
@@ -78,7 +80,7 @@ if (-not (Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue)) {
     exit 2
 }
 
-Register-PlaylistQuestSession -WorkflowPid $WorkflowPid -WorkflowName $WorkflowName
+Register-PlaylistQuestSession -WorkflowPid $WorkflowPid -WorkflowName $WorkflowName -DeadlineUtc $DeadlineUtc
 # The last End session's progress belongs to an earlier workflow (unless one is still running).
 try {
     $prev = Get-Content -LiteralPath $script:PlaylistShutdownPath -Raw -ErrorAction Stop | ConvertFrom-Json

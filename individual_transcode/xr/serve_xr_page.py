@@ -20,7 +20,8 @@ Routes
   /xr_lists.json         {files: [{name: "hybrid/3d_op_00_LR_180.mkv", bytes, modified, modifiedMs, ageMs}],
                          runStartMs, staleCount}: a slot older than its folder's running workflow (registered
                          in SESSION_PATH, name = folder) is a leftover of an earlier run: "stale": true (the page
-                         loops those only until this run has a finished slot).
+                         loops those only until this run has a finished slot). deadlineMs: {folder: epoch ms}
+                         of that workflow's -BatchTimeoutSec deadline (session deadlineUtc; the page counts down).
   /media/<folder>/<file> the segment, with HTTP Range (seeking), no-store. ?b=<bytes>&t=<mtime ms> (the
                          page's playlist entry) names the version: a finished one is served from a private
                          snapshot copy (see SNAP_DIR), since segment_wrap 2 truncates and rewrites that slot
@@ -156,17 +157,20 @@ def _parse_utc(s: str) -> float | None:
     return _dt.datetime(y, mo, d, h, mi, se, tzinfo=_dt.timezone.utc).timestamp() + frac - off
 
 
-def run_starts() -> dict[str, float]:
-    """{folder: epoch s} when the running workflow for that folder registered (newest if several). A slot
-    older than that is left over from an earlier run - this run has not reached it yet, and segment_wrap 2
-    may never reuse it. The page loops those back-to-back while the new run is still standardizing /
-    preparing (it used to wait 90 s per clip for a "newer" one), and switches once this run has a finished slot."""
+def run_starts() -> tuple[dict[str, float], dict[str, float]]:
+    """({folder: epoch s} when the running workflow for that folder registered (newest if several),
+    {folder: epoch s} of that workflow's deadline). A slot older than the start is left over from an earlier
+    run - this run has not reached it yet, and segment_wrap 2 may never reuse it. The page loops those
+    back-to-back while the new run is still standardizing / preparing (it used to wait 90 s per clip for a
+    "newer" one), and switches once this run has a finished slot. The deadline (-BatchTimeoutSec; none when
+    it is 0 or an older copy registered the session) is the page's workflow timeout countdown."""
     out: dict[str, float] = {}
+    deadlines: dict[str, float] = {}
     try:
         with open(SESSION_PATH, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
-        return out
+        return out, deadlines
     for s in (data.get("sessions") or []) if isinstance(data, dict) else []:
         if not isinstance(s, dict) or s.get("name") not in FOLDERS:
             continue
@@ -178,7 +182,12 @@ def run_starts() -> dict[str, float]:
         t = _parse_utc(s.get("registeredUtc"))
         if t is not None and t > out.get(s["name"], 0):
             out[s["name"]] = t
-    return out
+            d = _parse_utc(s.get("deadlineUtc"))
+            if d is not None:
+                deadlines[s["name"]] = d
+            else:
+                deadlines.pop(s["name"], None)
+    return out, deadlines
 
 
 def open_shared(path: str):
@@ -388,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
     def _lists(self) -> dict:
         now = time.time()
         files = []
-        starts = run_starts()
+        starts, deadlines = run_starts()
         stale: dict[str, int] = {}
         for folder in FOLDERS:
             d = os.path.join(self.server.opts.root, folder)
@@ -418,7 +427,8 @@ class Handler(BaseHTTPRequestHandler):
                     "growing": growing,
                 })
         return {"root": self.server.opts.root, "now": int(now * 1000), "files": files,
-                "runStartMs": {f: int(t * 1000) for f, t in starts.items()}, "staleCount": stale}
+                "runStartMs": {f: int(t * 1000) for f, t in starts.items()}, "staleCount": stale,
+                "deadlineMs": {f: int(t * 1000) for f, t in deadlines.items()}}
 
     def _page(self, query: dict, head_only: bool):
         opts = self.server.opts

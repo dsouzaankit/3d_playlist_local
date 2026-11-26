@@ -1743,7 +1743,7 @@ if (Initialize-OrchestratorFailureLog -FailureLogPath $transcodeFailureLogPath) 
 if (-not $DryRun) {
     $questSessionScript = Join-Path $orchestratorRoot 'individual_transcode\Start-PlaylistQuestSession.ps1'
     if (Test-Path -LiteralPath $questSessionScript -PathType Leaf) {
-        try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'flat' } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
+        try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'flat' -DeadlineUtc $orchestratorDeadlineUtcIso } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
     }
 }
 Write-Host 'Press Space during a transcode to pause/resume DLNA export ffmpeg (3d_op_*.mkv). Enter cancels and exits.'

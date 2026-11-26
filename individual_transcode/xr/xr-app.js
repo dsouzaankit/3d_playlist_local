@@ -701,8 +701,45 @@
   function fetchLists() {
     return fetch("xr_lists.json", { cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (j) { return (j && j.files) || []; });
+      .then(function (j) { noteDeadlines(j); return (j && j.files) || []; });
   }
+  // Workflow timeout countdown: the running workflow's -BatchTimeoutSec deadline per folder (xr_lists.json
+  // deadlineMs, from the session registration). Counted against the PC clock (server "now"), so a headset
+  // clock that is off does not shift it. The deadline keeps running while export is paused, like the workflow's.
+  var deadlineEl = document.getElementById("xr-deadline");
+  var deadlines = {};       // folder -> epoch ms (PC clock)
+  var clockSkewMs = 0;      // PC now - this device's now
+  function noteDeadlines(j) {
+    if (!j) return;
+    deadlines = (j.deadlineMs && typeof j.deadlineMs === "object") ? j.deadlineMs : {};
+    if (typeof j.now === "number") clockSkewMs = j.now - Date.now();
+    renderDeadline();
+  }
+  function formatHms(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (s < 10 ? "0" : "") + s;
+  }
+  function renderDeadline() {
+    if (!deadlineEl) return;
+    // This page's playlist first; else the one running workflow (the page may show another mode).
+    var folder = deadlines[mode] ? mode : null;
+    if (!folder) {
+      var others = MODES.filter(function (m) { return deadlines[m]; });
+      if (others.length === 1) folder = others[0];
+    }
+    if (!folder) { deadlineEl.hidden = true; return; }
+    var left = (deadlines[folder] - (Date.now() + clockSkewMs)) / 1000;
+    var tag = folder === mode ? "" : MODE_LABELS[folder] + " ";
+    deadlineEl.textContent = left > 0
+      ? tag + "workflow timeout in " + formatHms(left)
+      : tag + "workflow timeout reached";
+    deadlineEl.className = left <= 0 ? "over" : (left <= 600 ? "soon" : "");
+    deadlineEl.hidden = false;
+  }
+  setInterval(renderDeadline, 1000);
+  // The playback polls only run around clip ends / an empty list: refresh the deadline on its own.
+  setInterval(function () { fetchLists().catch(function () {}); }, 20000);
   function applyFiles(files) {
     var curName = (activePlaylist()[index] || {}).name;
     setPlaylists(files);

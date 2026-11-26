@@ -1045,7 +1045,10 @@ try {
     if (-not $DryRun) {
         $questSessionScript = Join-Path $playlistLocal 'individual_transcode\Start-PlaylistQuestSession.ps1'
         if (Test-Path -LiteralPath $questSessionScript -PathType Leaf) {
-            try { & $questSessionScript -WorkflowPid $PID -WorkflowName 'fisheye' } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
+            # -DeadlineUtc (XR page countdown) only if that copy has it: a synced older 3d_playlist_local would reject it.
+            $qsArgs = @{ WorkflowPid = $PID; WorkflowName = 'fisheye' }
+            try { if ((Get-Command -Name $questSessionScript -ErrorAction Stop).Parameters.ContainsKey('DeadlineUtc')) { $qsArgs.DeadlineUtc = [string]$batchDeadlineUtcIso } } catch {}
+            try { & $questSessionScript @qsArgs } catch { Write-Warning "Quest session: $($_.Exception.Message)" }
         }
     }
     Write-Host "Batch control window pid=$PID - Space=pause/resume leaf export; Enter=cancel clip/batch."

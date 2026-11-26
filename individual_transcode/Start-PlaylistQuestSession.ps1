@@ -26,7 +26,10 @@
 [CmdletBinding()]
 param(
     [int] $WorkflowPid = $PID,
-    [string] $WorkflowName = ''
+    [string] $WorkflowName = '',
+    # The workflow's wall-clock deadline (-BatchTimeoutSec, ISO 'o' UTC; empty = none): the XR page
+    # shows a countdown to it.
+    [string] $DeadlineUtc = ''
 )
 
 # First of: quest\playlist-quest.json (this repo), quest_tools\quest-tools.json, the older shared
@@ -85,6 +88,7 @@ try {
     $env:PLAYLIST_QUEST_SESSION_PID = [string]$WorkflowPid
     Remove-Item Env:PLAYLIST_QUEST_XR_CLOSED -ErrorAction SilentlyContinue
     $argLine = '-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}" -WorkflowPid {1} -WorkflowName "{2}"' -f $starter, $WorkflowPid, ($WorkflowName -replace '"', '')
+    if ($DeadlineUtc -match '^[0-9T:.+\-Z]+$') { $argLine += ' -DeadlineUtc "{0}"' -f $DeadlineUtc }
     Start-Process -FilePath $pwsh -ArgumentList $argLine -WindowStyle Hidden | Out-Null
     Write-Host 'Quest session: sensor off + Quest control page on the headset (background). Its End session button stops this window and cleans up the Quest.'
     # Nothing opens on the PC: print a sign-in link instead (Ctrl+click in Windows Terminal). Loopback

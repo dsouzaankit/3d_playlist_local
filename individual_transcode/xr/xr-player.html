@@ -102,6 +102,17 @@
       padding: 0.7rem 1rem; border-radius: 999px; border: 1px solid #444;
       background: #166534; color: #fff; font-weight: 700; cursor: pointer;
     }
+    /* Workflow timeout countdown (-BatchTimeoutSec): top-left corner (free on the start overlay and the
+       2D preview; centred it sat on the overlay title). */
+    #xr-deadline {
+      position: fixed; top: 0.5rem; left: 0.75rem; z-index: 10060;
+      padding: 0.3rem 0.75rem; border-radius: 999px; border: 1px solid #334155;
+      background: rgba(15, 23, 42, 0.85); color: #cbd5e1; font-size: 0.85rem;
+      font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap;
+    }
+    #xr-deadline[hidden] { display: none; }
+    #xr-deadline.soon { color: #fbbf24; border-color: #b45309; }
+    #xr-deadline.over { color: #fca5a5; border-color: #b91c1c; }
     #xr-transport {
       /* Same bottom row as Enter AR / Enter VR. Stop short of that column
          (AR sits near right: 60px, about 15rem wide with VR). A full-width
@@ -231,6 +242,7 @@
 </head>
 <body>
   <button type="button" id="xr-reopen" aria-label="Show file list">Files</button>
+  <div id="xr-deadline" role="timer" aria-live="off" hidden></div>
   <div id="xr-archive-float" hidden></div>
   <div id="xr-archive-dd" aria-hidden="true">
     <div class="xr-archive-dd-panel" role="listbox" aria-label="Archive folder videos">

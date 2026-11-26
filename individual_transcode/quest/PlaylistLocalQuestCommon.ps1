@@ -71,7 +71,8 @@ function Get-PlaylistQuestSettings {
 
 # ---- State ----
 
-# Workflow shells registered at workflow start: { sessions: [ { pid, name, started, registeredUtc, shutdownScript } ] }.
+# Workflow shells registered at workflow start: { sessions: [ { pid, name, started, registeredUtc, deadlineUtc, shutdownScript } ] }.
+# deadlineUtc: the workflow's -BatchTimeoutSec deadline ('' = none); the XR page counts down to it.
 $script:PlaylistSessionPath = Join-Path $env:TEMP 'loopsegments-playlist-session.json'
 # End session progress, shown by the control page.
 $script:PlaylistShutdownPath = Join-Path $env:TEMP 'loopsegments-playlist-shutdown.json'
@@ -147,12 +148,12 @@ function Get-PlaylistQuestSessions {
 }
 
 function Register-PlaylistQuestSession {
-    param([int] $WorkflowPid, [string] $WorkflowName)
+    param([int] $WorkflowPid, [string] $WorkflowName, [string] $DeadlineUtc = '')
     $keep = @(Get-PlaylistQuestSessions | Where-Object { [int]$_.pid -ne $WorkflowPid })
     # shutdownScript: the control page's End session runs this workflow's copy (media folders keep
     # their own synced 3d_playlist_local).
     $entry = [pscustomobject]@{ pid = $WorkflowPid; name = $WorkflowName; started = (Get-PlaylistQuestProcessStart -ProcessId $WorkflowPid)
-        registeredUtc = [DateTime]::UtcNow.ToString('o'); shutdownScript = (Join-Path $PSScriptRoot 'Invoke-PlaylistLocalQuestShutdown.ps1') }
+        registeredUtc = [DateTime]::UtcNow.ToString('o'); deadlineUtc = $DeadlineUtc; shutdownScript = (Join-Path $PSScriptRoot 'Invoke-PlaylistLocalQuestShutdown.ps1') }
     try { @{ sessions = @($keep + $entry) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:PlaylistSessionPath -Encoding utf8 } catch {}
 }
 

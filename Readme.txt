@@ -262,6 +262,10 @@ Run sequence:
 #     this run and they drop out. Before this, a new run still standardizing showed the previous run's last minute and
 #     then "Waiting for the next segment..." for 90 s per clip. No leftovers either: the list fills in by itself (checked
 #     every 3 s), and if Launch was pressed playback starts on the first segment.
+#     Workflow timeout countdown: top-left badge "workflow timeout in H:MM:SS" (amber in the last 10 min, red once
+#     reached) - the running workflow's -BatchTimeoutSec deadline (deadlineUtc in the session file, xr_lists.json
+#     deadlineMs), counted on the PC clock and still ticking while export is paused. Prefixed with the mode when the
+#     page shows another playlist than the running workflow's; hidden with -BatchTimeoutSec 0 or no workflow running.
 #     Compared with Loop Segments' XR page (ios_3d_loop_segments, ios/LoopSegments/Resources/xr-app.js):
 #       - New run: both start at slot 00 (its SegmentExporter minuteIndex = 0, slot = minuteIndex % 2; ffmpeg
 #         segment numbering starts at 0). Its Stop deletes loop/; a natural finish leaves op_00/op_01, so the next
