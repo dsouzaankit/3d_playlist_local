@@ -61,6 +61,13 @@ TEMP = os.environ.get("TEMP") or os.environ.get("TMP") or HERE
 STATE_PATH = os.path.join(TEMP, "playlist-xr-server.json")
 LOG_PATH = os.path.join(TEMP, "playlist-xr-server.log")
 SESSION_PATH = os.path.join(TEMP, "loopsegments-playlist-session.json")
+# Last /media request (the page is playing), in quest_tools' shared format (lib\QuestMediaActivity.ps1:
+# one file per owner, read with Get-QuestMediaActivity). The Loop Segments companion's keep-awake reads it
+# and keeps the phone's Keep Alive (its LAN server, so L:) going while the Quest plays. Written at most
+# every ACTIVITY_WRITE_SEC; snapshot lines in the log are no proof of playback (the watcher copies for WATCH_SEC).
+ACTIVITY_OWNER = "playlist"
+ACTIVITY_PATH = os.path.join(TEMP, "quest-media-activity-%s.json" % ACTIVITY_OWNER)
+ACTIVITY_WRITE_SEC = 15
 CHUNK = 1024 * 1024
 # Finished segments are copied here on first request and served from the copy. The muxer pacing is ~1x
 # (flat: plus a 20 s initial burst and 1.2x catch-up), so the slot being watched is reopened with truncate
@@ -85,6 +92,23 @@ def log(msg: str) -> None:
     try:
         print(line, flush=True)
     except Exception:
+        pass
+
+
+def note_media_activity(server, rel: str) -> None:
+    now = time.time()
+    if now - server.activity_written < ACTIVITY_WRITE_SEC:
+        return
+    server.activity_written = now
+    rec = {"owner": ACTIVITY_OWNER, "lastMediaEpoch": now,
+           "lastMediaUtc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+           "media": rel, "pid": os.getpid()}
+    try:
+        tmp = ACTIVITY_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        os.replace(tmp, ACTIVITY_PATH)
+    except OSError:
         pass
 
 
@@ -222,6 +246,7 @@ class Server(ThreadingHTTPServer):
         self.snap_lock = threading.Lock()
         self.snap_locks: dict[str, threading.Lock] = {}
         self.watched: dict[str, float] = {}  # folder -> last /media request (snapshot_watcher copies these)
+        self.activity_written = 0.0  # note_media_activity throttle
 
     def server_bind(self):
         # HTTPServer.server_bind calls socket.getfqdn(), which took ~6 s on this LAN (the launcher waits 10 s).
@@ -324,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             ext = os.path.splitext(full)[1].lower()
             self.server.watched[rel.split("/")[0]] = time.time()
+            if not head_only:
+                note_media_activity(self.server, rel)
             q = parse_qs(parts.query)
             try:
                 want = (int((q.get("b") or [""])[0]), int((q.get("t") or [""])[0]))

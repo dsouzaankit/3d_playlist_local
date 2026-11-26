@@ -243,6 +243,13 @@ Run sequence:
 #     reports the real size and growing=true; the page waits (up to 90 s) for it to finish. Loop Segments never needed this: the iPhone writes each segment to
 #     op_NN.staging.mp4 (not listed) and swaps it into the slot only when complete, so a clip stays whole for ~120 s.
 #     The fix lives only here (serve_xr_page.py + xr-app.js), not in the shared quest_tools engine.
+#     Playback heartbeat: each /media request (the page's <video> fetching a segment; at most every 15 s) writes
+#     %TEMP%\quest-media-activity-playlist.json, in quest_tools' shared format (quest_tools README "Quest media
+#     activity", lib\QuestMediaActivity.ps1). The Loop Segments companion's keep-awake reads it and, while a request came
+#     in the last 3 min, resets the phone's Keep Alive to 60 min every 10 min: otherwise the phone's LAN server, so
+#     the L: mount and a workflow running from L:\archive, stops 60 min after Loop Segments was last in front
+#     (ios_3d_loop_segments windows\quest\README.md "Keep Alive while the Quest plays"). Snapshot lines in the log
+#     are no proof of playback: the watcher keeps copying for 10 min after the page's last request.
 #     Log %TEMP%\playlist-xr-server.log; quest steps in %TEMP%\loopsegments-quest-lantab.log
 #     ("Playlist XR:"). By hand: quest\Start-PlaylistLocalQuestXr.ps1 -WorkflowPid <pid> -ServeOnly, or
 #     py -3 xr\serve_xr_page.py, then http://<pc>:18768/xr?mode=hybrid|fisheye|flat.
