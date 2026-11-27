@@ -135,12 +135,21 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
-def session_pids() -> list[int]:
+def read_sessions() -> list[dict]:
+    """The workflows registered in SESSION_PATH ([] when it is missing or unreadable)."""
     try:
         with open(SESSION_PATH, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
-        return [int(s.get("pid", 0)) for s in (data.get("sessions") or []) if isinstance(s, dict)]
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
+        return []
+    sessions = data.get("sessions") if isinstance(data, dict) else None
+    return [s for s in (sessions or []) if isinstance(s, dict)]
+
+
+def session_pids() -> list[int]:
+    try:
+        return [int(s.get("pid", 0)) for s in read_sessions()]
+    except (TypeError, ValueError):
         return []
 
 
@@ -166,13 +175,8 @@ def run_starts() -> tuple[dict[str, float], dict[str, float]]:
     it is 0 or an older copy registered the session) is the page's workflow timeout countdown."""
     out: dict[str, float] = {}
     deadlines: dict[str, float] = {}
-    try:
-        with open(SESSION_PATH, "r", encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return out, deadlines
-    for s in (data.get("sessions") or []) if isinstance(data, dict) else []:
-        if not isinstance(s, dict) or s.get("name") not in FOLDERS:
+    for s in read_sessions():
+        if s.get("name") not in FOLDERS:
             continue
         try:
             if not pid_alive(int(s.get("pid", 0))):
@@ -400,20 +404,7 @@ class Handler(BaseHTTPRequestHandler):
         starts, deadlines = run_starts()
         stale: dict[str, int] = {}
         for folder in FOLDERS:
-            d = os.path.join(self.server.opts.root, folder)
-            try:
-                entries = list(os.scandir(d))
-            except OSError:
-                continue
-            for e in entries:
-                if not e.is_file() or not re.match(r"(?i)^3d_op_\d+", e.name):
-                    continue
-                if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
-                    continue
-                try:
-                    st, growing = file_state(e, now)
-                except OSError:
-                    continue
+            for e, st, growing in segment_states(self.server.opts.root, folder, now):
                 is_stale = folder in starts and st.st_mtime < starts[folder]
                 if is_stale:
                     stale[folder] = stale.get(folder, 0) + 1
@@ -532,6 +523,24 @@ def file_state(entry, now: float):
     return st, growing
 
 
+def segment_states(root: str, folder: str, now: float):
+    """(entry, stat, growing) for each 3d_op_NN*.<video> directly in root/folder (unreadable ones skipped)."""
+    try:
+        entries = list(os.scandir(os.path.join(root, folder)))
+    except OSError:
+        return
+    for e in entries:
+        if not e.is_file() or not re.match(r"(?i)^3d_op_\d+", e.name):
+            continue
+        if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
+            continue
+        try:
+            st, growing = file_state(e, now)
+        except OSError:
+            continue
+        yield e, st, growing
+
+
 def snapshot_path(rel: str, size: int, mtime_ms: int) -> str:
     leaf = "%s_%d_%d%s" % (rel.replace("/", "__"), size, mtime_ms, os.path.splitext(rel)[1].lower())
     return os.path.join(SNAP_DIR, leaf)
@@ -594,19 +603,7 @@ def snapshot_watcher(server) -> None:
         time.sleep(1.0)
         now = time.time()
         for folder in [f for f, t in list(server.watched.items()) if now - t < WATCH_SEC]:
-            try:
-                entries = list(os.scandir(os.path.join(server.opts.root, folder)))
-            except OSError:
-                continue
-            for e in entries:
-                if not e.is_file() or not re.match(r"(?i)^3d_op_\d+", e.name):
-                    continue
-                if os.path.splitext(e.name)[1].lower() not in VIDEO_EXT:
-                    continue
-                try:
-                    st, growing = file_state(e, now)
-                except OSError:
-                    continue
+            for e, st, growing in segment_states(server.opts.root, folder, now):
                 if growing or st.st_size <= 0:
                     continue
                 rel = "%s/%s" % (folder, e.name)

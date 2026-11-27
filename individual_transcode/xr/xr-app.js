@@ -1,7 +1,8 @@
 // Ported from ios_3d_loop_segments ios/LoopSegments/Resources/xr-app.js (3d_playlist_local
 // individual_transcode/xr, served by serve_xr_page.py). Playlists are the DLNA segment folders
 // (hybrid / fisheye / flat, 3d_op_NN[_Suffix].mkv, segment_wrap 2) instead of the phone's
-// Loop / Working / Archive; each clip picks its projection from the Skybox suffix.
+// Loop / Working / Archive (that app's archive picker and sparse _working.mp4 resume seek are not
+// ported); each clip picks its projection from the Skybox suffix.
 (function () {
   var CFG = window.__XR_CONFIG__ || {};
   var FOLDERS = CFG.folders || { hybrid: "hybrid/", fisheye: "fisheye/", flat: "flat/" };
@@ -15,9 +16,10 @@
   var KEY_KEY = "loopsegments.lan.xrChromaKey.v1";
   var MODE_KEY = "playlistlocal.xr.mode.v1";
   var RATES = [0.7, 0.8, 0.85, 0.9, 1, 1.1, 1.2, 1.3];
+  var HEX_RE = /^#[0-9a-fA-F]{6}$/;
+  var DEFAULT_KEY = "#00ff00";
   var playlists = { hybrid: [], fisheye: [], flat: [] };
-  var archivePlaylist = [];
-  var mode = MODES.indexOf(CFG.defaultMode) >= 0 ? CFG.defaultMode : "hybrid";
+  var mode = normalizeMode(CFG.defaultMode);
   var loadedModifiedMs = 0;
   var listsLoaded = false;
   var index = 0;
@@ -66,16 +68,34 @@
       document.getElementById("chroma-sphere-right")
     ].filter(Boolean);
   }
-  function refreshSphereShader() {
+  function eachSphereComp(fn) {
     sphereEls().forEach(function (el) {
       var comp = el.components && el.components["chroma-stereo-sbs"];
-      if (comp) try { comp.applyShader(); } catch (e) {}
+      if (comp) try { fn(comp); } catch (e) {}
     });
   }
+  function refreshSphereShader() {
+    eachSphereComp(function (comp) { comp.applyShader(); });
+  }
+  // Projection / FOV changed: rebuild the dome geometry and eye layers.
+  function rebuildDomes() {
+    eachSphereComp(function (comp) {
+      comp._domeGeoReady = false;
+      comp.ensureDomeGeometry();
+      comp.syncEyeLayers();
+    });
+  }
+  // AV1 path: the engine's VideoTexture only re-uploads on request, so a seek must ask for a frame.
+  function kickAv1Texture() {
+    try {
+      if (typeof __xrVideoTex !== "undefined" && __xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
+    } catch (e) {}
+  }
+  function normalizeKey(hex) {
+    return HEX_RE.test(hex || "") ? hex.toLowerCase() : DEFAULT_KEY;
+  }
   function chromaKeyColor() {
-    var raw = (chromaKeyEl && chromaKeyEl.value) || "#00ff00";
-    if (!/^#[0-9a-fA-F]{6}$/.test(raw)) return "#00ff00";
-    return raw.toLowerCase();
+    return normalizeKey(chromaKeyEl && chromaKeyEl.value);
   }
   function syncShaderToggles() {
     var chromaOn = !!(chromaToggle && chromaToggle.checked);
@@ -90,8 +110,7 @@
     });
   }
   function applyChromaKey(hex) {
-    if (!/^#[0-9a-fA-F]{6}$/.test(hex || "")) hex = "#00ff00";
-    hex = hex.toLowerCase();
+    hex = normalizeKey(hex);
     if (chromaKeyEl) chromaKeyEl.value = hex;
     if (chromaKeyPlayEl) chromaKeyPlayEl.value = hex;
     Array.prototype.forEach.call(document.querySelectorAll(".xr-key-swatches button"), function (b) {
@@ -116,8 +135,8 @@
     return "No " + FOLDERS[mode] + "3d_op_*.mkv from this run yet — start the " + MODE_LABELS[mode].toLowerCase()
       + " workflow (or wait for its first 60 s segment); the list fills in by itself";
   }
-  function modeTag() {
-    return mode;
+  function clipLabel(item, proj) {
+    return "[" + mode + " · " + proj + "] " + (index + 1) + "/" + activePlaylist().length + ": " + leafName(item.name);
   }
   function listGroupTitle() {
     return MODE_LABELS[mode] + " segments (" + FOLDERS[mode] + ", oldest first"
@@ -138,12 +157,7 @@
   function applyProjection(item) {
     var p = projectionFor(item);
     window.__xrProjection = p;
-    sphereEls().forEach(function (el) {
-      var comp = el.components && el.components["chroma-stereo-sbs"];
-      if (!comp) return;
-      comp._domeGeoReady = false;
-      try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (eP) {}
-    });
+    rebuildDomes();
     return p;
   }
   function leafName(path) {
@@ -217,10 +231,8 @@
     } catch (e) {
       try { video.currentTime = t; } catch (e2) {}
     }
-    try {
-      if (typeof __xrVideoTex !== "undefined" && __xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
-    } catch (e3) {}
-    try { refreshSphereShader(); } catch (e4) {}
+    kickAv1Texture();
+    refreshSphereShader();
     syncTransportUI();
   }
   function endSeekDrag() {
@@ -283,165 +295,31 @@
     if (show) {
       stopPlaybackForHome();
     } else {
-      closeArchiveDropdown();
       __xrDs.exiting = false;
       __xrDs.suspendBlit = false;
-      try { refreshSphereShader(); } catch (eKick) {}
+      refreshSphereShader();
       try { xrLog("launch-engine", { sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eL) {}
     }
-    syncArchiveFloat();
   }
   function seekBy(delta) {
     applySeekTime((Number(video.currentTime) || 0) + delta);
-  }
-  var workingSeekSec = 0;
-  // Phone-only (sparse _working.mp4 resume point); nothing to fetch on the PC.
-  function refreshWorkingSeek() {
-    workingSeekSec = 0;
-    return Promise.resolve();
-  }
-  function applyWorkingSeekIfNeeded(item) {
-    if (!item || !isSparseWorkingName(item.name) || !(workingSeekSec > 0)) return;
-    var target = workingSeekSec;
-    var apply = function () {
-      try {
-        if (Math.abs((video.currentTime || 0) - target) > 0.5) video.currentTime = target;
-      } catch (e) {}
-    };
-    if (video.readyState >= 1) apply();
-    else {
-      var onMeta = function () {
-        video.removeEventListener("loadedmetadata", onMeta);
-        apply();
-      };
-      video.addEventListener("loadedmetadata", onMeta);
-    }
-  }
-  var archiveDd = document.getElementById("xr-archive-dd");
-  var archiveDdList = document.getElementById("xr-archive-dd-list");
-  var archiveDdClose = document.getElementById("xr-archive-dd-close");
-  var archiveFloat = document.getElementById("xr-archive-float");
-  function archiveSelectionLabel() {
-    var playlist = archivePlaylist;
-    if (!playlist.length) return emptyLabel();
-    var item = playlist[index] || playlist[0];
-    var sz = formatBytes(item.bytes);
-    return (index + 1) + "/" + playlist.length + " · " + leafName(item.name)
-      + (sz ? " · " + sz : "");
-  }
-  function closeArchiveDropdown() {
-    if (!archiveDd) return;
-    archiveDd.classList.remove("open");
-    archiveDd.setAttribute("aria-hidden", "true");
-  }
-  function openArchiveDropdown() {
-    if (!archiveDd || !archiveDdList) return;
-    archiveDdList.innerHTML = "";
-    var playlist = archivePlaylist;
-    if (!playlist.length) {
-      var empty = document.createElement("div");
-      empty.className = "xr-file-empty";
-      empty.textContent = emptyLabel();
-      archiveDdList.appendChild(empty);
-    } else {
-      playlist.forEach(function (item, idx) {
-        var btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "xr-file-item" + (idx === index ? " selected" : "");
-        btn.setAttribute("role", "option");
-        btn.setAttribute("aria-selected", idx === index ? "true" : "false");
-        var nameEl = document.createElement("span");
-        nameEl.className = "xr-file-name";
-        nameEl.textContent = leafName(item.name);
-        var meta = document.createElement("span");
-        meta.className = "xr-file-meta";
-        var bits = [];
-        var sz = formatBytes(item.bytes);
-        if (sz) bits.push(sz);
-        bits.push(item.name);
-        meta.textContent = bits.join(" · ");
-        btn.appendChild(nameEl);
-        btn.appendChild(meta);
-        btn.onclick = function () {
-          closeArchiveDropdown();
-          loadIndex(idx, wantPlay && !video.paused);
-        };
-        archiveDdList.appendChild(btn);
-      });
-    }
-    archiveDd.classList.add("open");
-    archiveDd.setAttribute("aria-hidden", "false");
-  }
-  function makeArchivePickButton() {
-    var btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "xr-archive-pick";
-    btn.setAttribute("aria-haspopup", "listbox");
-    btn.setAttribute("aria-expanded", "false");
-    var labelEl = document.createElement("span");
-    labelEl.className = "xr-archive-pick-label";
-    labelEl.textContent = archiveSelectionLabel();
-    var chev = document.createElement("span");
-    chev.className = "xr-archive-pick-chevron";
-    chev.textContent = "▾";
-    btn.appendChild(labelEl);
-    btn.appendChild(chev);
-    btn.onclick = function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      openArchiveDropdown();
-    };
-    return btn;
-  }
-  function syncArchiveFloat() {
-    if (!archiveFloat) return;
-    // Floater belongs on the Launch Engine picker page — not over playback.
-    var overlayOpen = overlay && overlay.style.display !== "none";
-    var show = mode === "archive" && overlayOpen;
-    archiveFloat.style.display = show ? "block" : "none";
-    if (show) {
-      archiveFloat.removeAttribute("hidden");
-      archiveFloat.innerHTML = "";
-      archiveFloat.appendChild(makeArchivePickButton());
-    } else {
-      archiveFloat.setAttribute("hidden", "");
-      archiveFloat.innerHTML = "";
-    }
   }
   function renderFileList() {
     if (!fileListEl) return;
     fileListEl.innerHTML = "";
     var playlist = activePlaylist();
-    if (mode === "archive") {
-      var wrap = document.createElement("div");
-      wrap.className = "xr-archive-pick-wrap";
-      if (!playlist.length) {
-        var empty = document.createElement("div");
-        empty.className = "xr-file-empty";
-        empty.textContent = emptyLabel();
-        wrap.appendChild(empty);
-      } else {
-        wrap.appendChild(makeArchivePickButton());
-      }
-      fileListEl.appendChild(wrap);
-      syncArchiveFloat();
-      return;
-    }
     if (!playlist.length) {
-      var empty2 = document.createElement("div");
-      empty2.className = "xr-file-empty";
-      empty2.textContent = emptyLabel();
-      fileListEl.appendChild(empty2);
-      syncArchiveFloat();
+      var empty = document.createElement("div");
+      empty.className = "xr-file-empty";
+      empty.textContent = emptyLabel();
+      fileListEl.appendChild(empty);
       return;
     }
-    function addGroup(title) {
-      var g = document.createElement("div");
-      g.className = "xr-file-group";
-      g.textContent = title;
-      fileListEl.appendChild(g);
-    }
-    function addItem(item, idx, groupHint) {
+    var group = document.createElement("div");
+    group.className = "xr-file-group";
+    group.textContent = listGroupTitle();
+    fileListEl.appendChild(group);
+    playlist.forEach(function (item, idx) {
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "xr-file-item" + (idx === index ? " selected" : "");
@@ -453,32 +331,16 @@
       nameEl.textContent = leafName(item.name);
       var meta = document.createElement("span");
       meta.className = "xr-file-meta";
-      var bits = [];
-      if (groupHint) bits.push(groupHint);
       var sz = formatBytes(item.bytes);
-      if (sz) bits.push(sz);
-      bits.push(item.name);
-      meta.textContent = bits.join(" · ");
+      meta.textContent = [mode].concat(sz ? [sz] : [], [item.name]).join(" · ");
       btn.appendChild(nameEl);
       btn.appendChild(meta);
       btn.onclick = function () {
         loadIndex(idx, wantPlay && !video.paused);
       };
       fileListEl.appendChild(btn);
-    }
-    addGroup(listGroupTitle());
-    playlist.forEach(function (item, idx) { addItem(item, idx, modeTag()); });
-    syncArchiveFloat();
-  }
-  if (archiveDdClose) archiveDdClose.onclick = function () { closeArchiveDropdown(); };
-  if (archiveDd) {
-    archiveDd.addEventListener("click", function (e) {
-      if (e.target === archiveDd) closeArchiveDropdown();
     });
   }
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") closeArchiveDropdown();
-  });
   function snapRate(v) {
     var r = Math.round(Number(v) * 20) / 20;
     if (!isFinite(r)) return 1;
@@ -532,13 +394,7 @@
     } catch (e2) {}
     if (volumeEl) volumeEl.value = String(v);
     if (volumeLaunchEl) volumeLaunchEl.value = String(v);
-    var label = document.getElementById("xr-vol-label");
-    if (label) label.setAttribute("value", Math.round(v * 100) + "%");
-    window.__xrVolume = v;
   }
-  window.__xrStepVolume = function (delta) {
-    applyVolume(readVolume() + Number(delta || 0));
-  };
   function syncModeButtons() {
     MODES.forEach(function (m) {
       if (modeBtns[m]) modeBtns[m].classList.toggle("active", mode === m);
@@ -558,8 +414,6 @@
     if (!rest || rest.indexOf("/") >= 0) return false;
     return /^3d_op_\d+/i.test(rest) && isVideoExt(rest);
   }
-  // No sparse _working.mp4 on the PC (phone-only resume seek).
-  function isSparseWorkingName() { return false; }
   function cacheBust(entry) {
     var q = [];
     if (entry.bytes) q.push("b=" + encodeURIComponent(String(entry.bytes)));
@@ -613,7 +467,6 @@
     }
     return 0;
   }
-  function buildArchivePlaylist() { return []; }
   function loadIndex(i, autoplay) {
     var playlist = activePlaylist();
     if (!playlist.length) {
@@ -634,28 +487,20 @@
     try { xrLog("loadIndex", { i: index, name: item.name, proj: proj, presenting: !!xrIsPresenting(), sawAv1Tex: !!__xrDs.sawAv1Tex }); } catch (eLog) {}
     video.src = item.url;
     applyRate();
-    setLabel("[" + modeTag() + " · " + proj + "] " + (index + 1) + "/" + playlist.length + ": " + leafName(item.name)
+    setLabel(clipLabel(item, proj)
       + (item.stale ? " · previous run (looping until this run's first segment)" : ""));
     renderFileList();
     syncShaderToggles();
-    applyWorkingSeekIfNeeded(item);
-    var onReady = function () {
-      applyWorkingSeekIfNeeded(item);
-      refreshSphereShader();
-    };
     var onLoaded = function () {
       video.removeEventListener("loadeddata", onLoaded);
-      onReady();
+      refreshSphereShader();
     };
     video.addEventListener("loadeddata", onLoaded);
-    if (video.readyState >= 2) onReady();
+    if (video.readyState >= 2) refreshSphereShader();
     if (wantPlay) {
       var p = video.play();
       if (p && typeof p.then === "function") {
-        p.then(function () {
-          applyWorkingSeekIfNeeded(item);
-          refreshSphereShader();
-        }).catch(function () {
+        p.then(refreshSphereShader).catch(function () {
           wantPlay = false;
           setLabel("Play blocked — tap Launch Engine");
         });
@@ -696,7 +541,6 @@
       playlists[m] = r.list;
       staleLoop[m] = r.stale;
     });
-    archivePlaylist = buildArchivePlaylist(files);
   }
   function fetchLists() {
     return fetch("xr_lists.json", { cache: "no-store" })
@@ -715,11 +559,6 @@
     if (typeof j.now === "number") clockSkewMs = j.now - Date.now();
     renderDeadline();
   }
-  function formatHms(sec) {
-    sec = Math.max(0, Math.floor(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (s < 10 ? "0" : "") + s;
-  }
   function renderDeadline() {
     if (!deadlineEl) return;
     // This page's playlist first; else the one running workflow (the page may show another mode).
@@ -732,7 +571,7 @@
     var left = (deadlines[folder] - (Date.now() + clockSkewMs)) / 1000;
     var tag = folder === mode ? "" : MODE_LABELS[folder] + " ";
     deadlineEl.textContent = left > 0
-      ? tag + "workflow timeout in " + formatHms(left)
+      ? tag + "workflow timeout in " + formatClock(left)
       : tag + "workflow timeout reached";
     deadlineEl.className = left <= 0 ? "over" : (left <= 600 ? "soon" : "");
     deadlineEl.hidden = false;
@@ -740,14 +579,21 @@
   setInterval(renderDeadline, 1000);
   // The playback polls only run around clip ends / an empty list: refresh the deadline on its own.
   setInterval(function () { fetchLists().catch(function () {}); }, 20000);
+  // Index of the entry named `name` in the active playlist (names are unique there), else -1.
+  function indexOfName(name) {
+    var list = activePlaylist();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].name === name) return i;
+    }
+    return -1;
+  }
   function applyFiles(files) {
     var curName = (activePlaylist()[index] || {}).name;
     setPlaylists(files);
     applyRate();
     var list = activePlaylist();
     if (list.length) {
-      var keep = -1;
-      if (listsLoaded && curName) list.forEach(function (e, i) { if (e.name === curName) keep = i; });
+      var keep = listsLoaded && curName ? indexOfName(curName) : -1;
       listsLoaded = true;
       loadIndex(keep >= 0 ? keep : liveStartIndex(list), false);
     } else {
@@ -788,29 +634,22 @@
         // Still on the previous run's leftovers: no newer slot will come from them, so go straight to
         // the next one (oldest first, wrapping) instead of waiting.
         if (staleLoop[mode] && activePlaylist().length) {
-          var ls = activePlaylist();
-          var atS = -1;
-          ls.forEach(function (e, i) { if (e.name === curName) atS = i; });
           advancing = false;
-          loadIndex(atS + 1, true);
+          loadIndex(indexOfName(curName) + 1, true);
           return;
         }
         var p = pick();
         tries++;
         // A slot takes ~60 s to write: wait it out rather than play it live (that stalls at the write head).
         if (p && (!p.growing || tries >= 90)) {
-          var list = activePlaylist();
           advancing = false;
-          loadIndex(list.indexOf(p.item), true);
+          loadIndex(activePlaylist().indexOf(p.item), true);
           return;
         }
         if (!p && tries >= 90) {
           advancing = false;
-          var l2 = activePlaylist();
-          if (!l2.length) { setLabel(emptyLabel()); renderFileList(); return; }
-          var at = -1;
-          l2.forEach(function (e, i) { if (e.name === curName) at = i; });
-          loadIndex(at + 1, true);
+          if (!activePlaylist().length) { setLabel(emptyLabel()); renderFileList(); return; }
+          loadIndex(indexOfName(curName) + 1, true);
           return;
         }
         setLabel(p ? ("Waiting for " + leafName(p.item.name) + " to finish writing…") : "Waiting for the next segment…");
@@ -873,7 +712,7 @@
       try { localStorage.setItem(PROJ_KEY, projSel.value); } catch (eP2) {}
       var item = activePlaylist()[index];
       var p = applyProjection(item);
-      if (item) setLabel("[" + modeTag() + " · " + p + "] " + (index + 1) + "/" + activePlaylist().length + ": " + leafName(item.name));
+      if (item) setLabel(clipLabel(item, p));
       refreshSphereShader();
     };
   }
@@ -887,14 +726,7 @@
     window.__xrZoom = Number(zoomEl.value) || 1;
     zoomEl.addEventListener("input", function () {
       window.__xrZoom = Number(zoomEl.value) || 1;
-      var lab = document.getElementById("xr-zoom-label");
-      if (lab) lab.setAttribute("value", Math.round(window.__xrZoom * 180) + "°");
-      sphereEls().forEach(function (el) {
-        var comp = el.components && el.components["chroma-stereo-sbs"];
-        if (!comp) return;
-        comp._domeGeoReady = false;
-        try { comp.ensureDomeGeometry(); comp.syncEyeLayers(); } catch (eZ) {}
-      });
+      rebuildDomes();
     });
   }
   var distEl = document.getElementById("xr-dist");
@@ -903,10 +735,7 @@
     distEl.addEventListener("input", function () {
       window.__xrDist = Number(distEl.value) || 0;
       // followHead reads __xrDist every immersive frame; nudge once for immediate feedback.
-      sphereEls().forEach(function (el) {
-        var comp = el.components && el.components["chroma-stereo-sbs"];
-        if (comp) try { comp.followHead(); } catch (eD) {}
-      });
+      eachSphereComp(function (comp) { comp.followHead(); });
     });
   }
   if (chromaToggle) chromaToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
@@ -917,7 +746,7 @@
   });
   try {
     var savedKey = localStorage.getItem(KEY_KEY);
-    if (savedKey && /^#[0-9a-fA-F]{6}$/.test(savedKey)) applyChromaKey(savedKey);
+    if (savedKey && HEX_RE.test(savedKey)) applyChromaKey(savedKey);
   } catch (eKey) {}
   // Fisheye background (Resolve-FisheyeBackgroundColor.ps1): a key color means the area around the
   // fisheye circles is meant to be keyed out -> Chroma on with that key. Black = Chroma on with key
@@ -929,7 +758,7 @@
     var css = String(bg.css || "");
     if (name === "black") css = "#000000";
     if (chromaToggle) chromaToggle.checked = true;
-    if (/^#[0-9a-fA-F]{6}$/.test(css)) applyChromaKey(css);
+    if (HEX_RE.test(css)) applyChromaKey(css);
     else syncShaderToggles();
   })();
   if (sbsToggle) sbsToggle.onchange = function () { syncShaderToggles(); refreshSphereShader(); };
@@ -989,7 +818,7 @@
   function isXrChromeTarget(el) {
     if (!el || !el.closest) return false;
     return !!el.closest(
-      "#xr-transport, #xr-reopen, #overlay, #xr-archive-float, #xr-archive-dd,"
+      "#xr-transport, #xr-reopen, #overlay,"
       + " .a-enter-vr, .a-enter-ar, .a-dialog, .a-modal, button, input, select, a, label"
     );
   }
@@ -1097,10 +926,8 @@
   video.addEventListener("durationchange", syncTransportUI);
   video.addEventListener("loadedmetadata", syncTransportUI);
   video.addEventListener("seeked", function () {
-    try {
-      if (typeof __xrVideoTex !== "undefined" && __xrVideoTex && __xrDs.av1Known && __xrDs.av1 === true) __xrVideoTex.needsUpdate = true;
-    } catch (e) {}
-    try { refreshSphereShader(); } catch (e2) {}
+    kickAv1Texture();
+    refreshSphereShader();
     syncTransportUI();
   });
   video.addEventListener("progress", syncTransportUI);
@@ -1211,7 +1038,5 @@
       finish(false, false);
     });
   })();
-  refreshWorkingSeek().finally(function () {
-    refreshPlaylists();
-  });
+  refreshPlaylists();
 })();
