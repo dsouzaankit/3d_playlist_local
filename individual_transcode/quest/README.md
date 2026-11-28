@@ -63,6 +63,6 @@ The run and its helpers run at AboveNormal priority (a fisheye run starved them 
 | `openWaitMinutes` | `questPlaylistOpenWaitMinutes` | `0` | `0` = keep trying to open the page until the workflow ends; a number = minutes |
 | `player` | `questPlaylistPlayer` | `xr` | `xr` (the XR page) or `none`; `$env:PLAYLIST_QUEST_PLAYER` wins |
 | `xrPort` | `questPlaylistXrPort` | `18768` | XR page port |
-| `xrHost` | `questPlaylistXrHost` | `auto` | `auto` (the PC's name when the headset resolves it, else its IPv4), `ip`, or a host name; `$env:PLAYLIST_XR_HOST` wins |
+| `xrHost` | `questPlaylistXrHost` | `auto` | `auto` (the PC's name when the headset resolves it, else its IPv4), `ip`, or a host name; `$env:PLAYLIST_XR_HOST` wins. Opened on a name, it falls back to the IPv4 mid-run when the headset stops resolving it (page idle, Quest Browser in front) |
 | `historyOrigins` | `questPlaylistHistoryOrigins` | `[]` | Extra origins every cleanup closes and deletes (`{pc}` = this PC's address), e.g. `http://{pc}:8200` |
 | `enterExitSec` | `questPlaylistEnterExitSec` | `180` | End session: seconds a workflow window gets after Enter before it is killed (`0` = never) |

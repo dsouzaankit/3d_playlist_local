@@ -299,6 +299,10 @@ Run sequence:
 #     xrHost (playlist-quest.json; older questPlaylistXrHost) / $env:PLAYLIST_XR_HOST = auto (default): <COMPUTERNAME>.local, then <COMPUTERNAME>, when the headset
 #     resolves it to this PC (adb shell ping), else this PC's IPv4 on the route to the headset; ip = always the IPv4;
 #     <name> = that name (e.g. a router DNS name). A name that then fails to load falls back to the IPv4 once.
+#     Mid-run: opened on a name, Start-PlaylistLocalQuestXr.ps1 keeps running until the workflow ends; when the page has
+#     fetched no media for 45 s, Quest Browser is in front and the headset fails to resolve the name twice 15 s apart
+#     (the .local lookup can stop working mid-run: DNS_PROBE_FINISHED_NXDOMAIN after a return from Virtual Desktop),
+#     it opens the page on the IPv4 and closes the name-origin tabs. Never while another app is in front.
 #     Most reliable static option: a DHCP reservation for this PC in the router (the IPv4 then never changes).
 #   Quit: every XR origin opened is registered in quest_tools' shared origin list (%TEMP%\quest-browser-origins.json,
 #     owner 3d_playlist_local-xr), so every Quest cleanup - this workflow's quit, End session, a running Loop Segments

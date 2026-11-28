@@ -27,6 +27,10 @@
        when false, its origin is added to chrome://flags "unsafely-treat-insecure-origin-as-secure"
        (helper tab: this server's /xr-assets/lsclean) and Quest Browser restarts once (WebXR needs a
        secure context). A name the browser then fails to load falls back to the IPv4 once.
+    5. Opened on a name: stays running until the workflow ends and falls back to the IPv4 mid-run
+       when the headset stops resolving the name (Watch-PlaylistXrHostName: page idle 45 s, Quest
+       Browser in front, 2 failed lookups 15 s apart, a name-origin tab still open). The IPv4 page
+       is opened and the name-origin tabs are closed; once only.
 
   The opened origin goes into quest_tools' shared origin list (%TEMP%\quest-browser-origins.json,
   owner 3d_playlist_local-xr); every Quest cleanup (the workflow quit, End session, the Loop
@@ -155,18 +159,67 @@ if (-not $ip) { Write-QuestLog 'Playlist XR: no IPv4 route to the headset - XR p
 $xrHost = Resolve-QuestPcHost -DeviceSerial $dev -Ip $ip -Mode $xr.HostMode -Label 'Playlist XR: '
 Write-QuestLog ("Playlist XR: page host {0} (questPlaylistXrHost={1}; PC IPv4 {2})." -f $xrHost, $xr.HostMode, $ip)
 
+# Opens the page on -HostName; $true when it is open (flags fixed if needed).
+function Open-PlaylistXrOn {
+    param([string] $DeviceSerial, [string] $HostName)
+    $origin = "http://${HostName}:$($xr.Port)"
+    Add-PlaylistXrSavedOrigin -Origin $origin
+    $url = "$origin/xr?mode=$mode"
+    if (Invoke-PlaylistXrOpen -DeviceSerial $DeviceSerial -Origin $origin -Url $url) {
+        Write-QuestLog "Playlist XR: $url open on the headset (Enter AR = passthrough). chrome://flags insecure-origin covers $origin."
+        return $true
+    }
+    Write-QuestLog "Playlist XR: opening $url failed."
+    return $false
+}
+
+# ---- 5. watch: the name stops resolving mid-run ----
+# The headset's .local lookup can fail later in a run (mDNS answers lost between router and headset;
+# seen after a return from Virtual Desktop reloaded the tab: DNS_PROBE_FINISHED_NXDOMAIN). The open
+# only falls back to the IPv4 when the name fails at open time, so until the workflow ends, every
+# PollSec: when the page has fetched no media for IdleSec, Quest Browser is the front app (never pulls
+# the user out of another app), the name fails to resolve on 2 polls in a row and a tab on the name
+# origin is still open -> the page is opened on this PC's IPv4 and the name-origin tabs are closed.
+function Watch-PlaylistXrHostName {
+    param([string] $Name, [int] $PollSec = 15, [int] $IdleSec = 45)
+    $nameOrigin = "http://${Name}:$($xr.Port)"
+    $fails = 0
+    Write-QuestLog "Playlist XR: watching $Name until PID $WorkflowPid ends (IPv4 fallback if it stops resolving)."
+    while (Get-Process -Id $WorkflowPid -ErrorAction SilentlyContinue) {
+        Start-Sleep -Seconds $PollSec
+        # Owner 'playlist' = serve_xr_page.py ACTIVITY_OWNER.
+        if (@(Get-QuestMediaActivity -FreshSec $IdleSec | Where-Object Owner -eq 'playlist').Count) { $fails = 0; continue }
+        $dev = Get-OnlineQuestSerial
+        if (-not $dev) { $fails = 0; continue }
+        if ((Get-QuestFrontActivity -DeviceSerial $dev) -notlike "$script:QtBrowserPackage/*") { $fails = 0; continue }
+        $ip = Get-QuestPcAddress -DeviceSerial $dev -DefaultRoute
+        if (-not $ip) { continue }
+        if (Test-QuestHeadsetResolves -DeviceSerial $dev -Name $Name -Ip $ip) { $fails = 0; continue }
+        if (++$fails -lt 2) { continue }
+        $fails = 0
+        $stale = @()
+        if (Open-QuestDevTools -DeviceSerial $dev) {
+            try { $stale = @(Get-QuestLanTabs -Origins @($nameOrigin)) } finally { Close-QuestDevTools }
+        }
+        if (-not $stale.Count) { continue }  # closed by the user: nothing to replace
+        Write-QuestLog "Playlist XR: the headset no longer resolves $Name - opening the page on $ip."
+        if (-not (Open-PlaylistXrOn -DeviceSerial $dev -HostName $ip)) { continue }
+        if (Open-QuestDevTools -DeviceSerial $dev) {
+            try { foreach ($t in $stale) { Close-QuestTab -Id $t.id } } finally { Close-QuestDevTools }
+            Write-QuestLog "Playlist XR: closed $($stale.Count) tab(s) on $nameOrigin."
+        }
+        return
+    }
+}
+
 # ---- 4. open ----
 $hosts = @($xrHost)
 if ($xrHost -ne $ip) { $hosts += $ip }
+$openedOn = ''
 foreach ($h in $hosts) {
-    $origin = "http://${h}:$($xr.Port)"
-    Add-PlaylistXrSavedOrigin -Origin $origin
-    $url = "$origin/xr?mode=$mode"
-    if (Invoke-PlaylistXrOpen -DeviceSerial $dev -Origin $origin -Url $url) {
-        Write-QuestLog "Playlist XR: $url open on the headset (Enter AR = passthrough). chrome://flags insecure-origin covers $origin."
-        exit 0
-    }
-    Write-QuestLog "Playlist XR: opening $url failed."
+    if (Open-PlaylistXrOn -DeviceSerial $dev -HostName $h) { $openedOn = $h; break }
     if (-not (Get-OnlineQuestSerial)) { Write-QuestLog 'Playlist XR: headset gone from adb - not trying another host.'; break }
 }
-exit 3
+if (-not $openedOn) { exit 3 }
+if ($openedOn -ne $ip) { Watch-PlaylistXrHostName -Name $openedOn }
+exit 0
