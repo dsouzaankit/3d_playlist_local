@@ -237,7 +237,14 @@ Run sequence:
 #     request, because the page drifts a few seconds behind the writer every minute (load + buffering ~100 Mbit/s):
 #     on-demand copies failed once it lagged ~50 s. A version with no copy left gets 410 instead of the new bytes.
 #     The page moves to the next segment on a media error (up to 3 in a row, debug ring: media-error) and after a
-#     6 s stall within 8 s of the end, or 20 s anywhere (stall-advance). "Still being written" comes from os.stat:
+#     6 s stall within 8 s of the end, or 20 s anywhere (stall-advance). Mid-segment freezes that cleared only on
+#     Pause / Play: at ~80 Mbit/s Quest Browser can sit on an empty buffer until the <video> is paused and played
+#     again, so after 3 s without progress the page does that itself, and at 6 s seeks to the same spot (a fresh
+#     Range request), before the 20 s skip (playback-nudge / playback-nudge-ok). waiting / stalled / resumed are
+#     logged with the seconds buffered ahead (playback-waiting, ahead: 0 = the buffer ran dry); the server copies
+#     playback-*, stall-advance and media-error lines into playlist-xr-server.log ("XR page:"), so they outlive the
+#     run (the debug ring is memory only). Many nudges with ahead: 0 = Wi-Fi headroom: lower the segment bitrate cap.
+#     Loop Segments' own page has the same nudge. "Still being written" comes from os.stat:
 #     Windows lists a file ffmpeg has open as 0 bytes with its open time, so xr_lists.json used to call the slot being
 #     muxed finished; Launch / next-segment then played it live and stalled at the write head. xr_lists.json now
 #     reports the real size and growing=true; the page waits (up to 90 s) for it to finish. Loop Segments never needed this: the iPhone writes each segment to
