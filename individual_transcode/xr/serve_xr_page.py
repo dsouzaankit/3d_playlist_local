@@ -81,6 +81,8 @@ SNAP_DIR = os.path.join(TEMP, "playlist-xr-snapshots")
 SNAP_KEEP = 4               # newest copies kept per folder (~2 minutes per slot)
 WATCH_SEC = 600
 GROWING_SEC = 2.5           # written within this long = still being muxed (xr-app.js GROWING_MS)
+# Page debug lines also written to LOG_PATH: xr-app.js stall / nudge / skip / media error records.
+PERSIST_RE = re.compile(r"^\S+ (playback-|stall-advance|media-error)")
 
 
 def log(msg: str) -> None:
@@ -309,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(body.decode("utf-8") or "{}")
             except ValueError:
                 data = {}
+            lines: list[str] = []
             with self.server.debug_lock:
                 if data.get("action") == "clear":
                     self.server.debug_lines = []
@@ -316,6 +319,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     lines = [str(x) for x in (data.get("lines") or [])][:200]
                     self.server.debug_lines = (self.server.debug_lines + lines)[-400:]
+            # Playback stalls / nudges / skips outlive the server (debug_lines are memory only).
+            for line in lines:
+                if PERSIST_RE.search(line):
+                    log("XR page: " + line[:600])
                     if isinstance(data.get("snapshot"), dict):
                         self.server.debug_snapshot = data["snapshot"]
             self._json({"ok": True})
